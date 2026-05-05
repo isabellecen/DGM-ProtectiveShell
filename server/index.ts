@@ -5,11 +5,13 @@ import { serveStatic } from "./static";
 import { createServer } from "http";
 import { seedDatabase } from "./seed";
 import { registerAuth } from "./auth";
+import { registerSecurity } from "./security";
 import { startScheduler } from "./scheduler";
 import { ZodError } from "zod";
 
 const app = express();
 const httpServer = createServer(app);
+registerSecurity(app);
 
 declare module "http" {
   interface IncomingMessage {

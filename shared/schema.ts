@@ -8,6 +8,8 @@ import {
   timestamp,
   jsonb,
   serial,
+  check,
+  index,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
@@ -34,7 +36,13 @@ export const jobs = pgTable("jobs", {
   longRunning: boolean("long_running").notNull().default(false),
   longWindowHours: integer("long_window_hours").default(24),
   enabled: boolean("enabled").notNull().default(true),
-});
+}, (table) => [
+  check("jobs_system_type_check", sql`${table.systemType} IN ('VEEAM', 'PBS', 'SYNOLOGY')`),
+  check("jobs_schedule_type_check", sql`${table.scheduleType} IN ('daily', 'weekly')`),
+  check("jobs_schedule_time_check", sql`${table.scheduleTime} ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'`),
+  index("jobs_customer_id_idx").on(table.customerId),
+  index("jobs_enabled_idx").on(table.enabled),
+]);
 
 export const insertJobSchema = createInsertSchema(jobs).omit({ id: true });
 export type InsertJob = z.infer<typeof insertJobSchema>;
@@ -47,7 +55,9 @@ export const jobRules = pgTable("job_rules", {
   subjectMatch: text("subject_match"),
   bodyMatch: text("body_match"),
   priority: integer("priority").notNull().default(0),
-});
+}, (table) => [
+  index("job_rules_job_id_idx").on(table.jobId),
+]);
 
 export const insertJobRuleSchema = createInsertSchema(jobRules).omit({ id: true });
 export type InsertJobRule = z.infer<typeof insertJobRuleSchema>;
@@ -60,7 +70,11 @@ export const expectedRuns = pgTable("expected_runs", {
   deadlineAt: timestamp("deadline_at", { withTimezone: true }).notNull(),
   status: text("status").notNull().default("PENDING"), // PENDING, OK, WARN, FAIL, MISSING
   linkedEventId: integer("linked_event_id"),
-});
+}, (table) => [
+  check("expected_runs_status_check", sql`${table.status} IN ('PENDING', 'OK', 'WARN', 'FAIL', 'MISSING')`),
+  uniqueIndex("expected_runs_job_scheduled_idx").on(table.jobId, table.scheduledFor),
+  index("expected_runs_status_deadline_idx").on(table.status, table.deadlineAt),
+]);
 
 export const insertExpectedRunSchema = createInsertSchema(expectedRuns).omit({ id: true });
 export type InsertExpectedRun = z.infer<typeof insertExpectedRunSchema>;
@@ -81,6 +95,8 @@ export const emails = pgTable("emails", {
   matchedJobId: integer("matched_job_id").references(() => jobs.id),
 }, (table) => [
   uniqueIndex("emails_folder_uid_uidvalidity_idx").on(table.folder, table.uidvalidity, table.uid),
+  index("emails_matched_job_id_idx").on(table.matchedJobId),
+  index("emails_received_at_idx").on(table.receivedAt),
 ]);
 
 export const insertEmailSchema = createInsertSchema(emails).omit({ id: true });
@@ -94,7 +110,11 @@ export const events = pgTable("events", {
   status: text("status").notNull(), // OK, WARN, FAIL, UNKNOWN
   receivedAt: timestamp("received_at", { withTimezone: true }).notNull(),
   emailId: integer("email_id").references(() => emails.id),
-});
+}, (table) => [
+  check("events_status_check", sql`${table.status} IN ('OK', 'WARN', 'FAIL', 'UNKNOWN')`),
+  index("events_job_received_idx").on(table.jobId, table.receivedAt),
+  index("events_expected_run_id_idx").on(table.expectedRunId),
+]);
 
 export const insertEventSchema = createInsertSchema(events).omit({ id: true });
 export type InsertEvent = z.infer<typeof insertEventSchema>;
@@ -108,9 +128,18 @@ export const incidents = pgTable("incidents", {
   title: text("title").notNull(),
   details: text("details"),
   state: text("state").notNull().default("OPEN"), // OPEN, ACKED, RESOLVED
+  sourceFingerprint: text("source_fingerprint"),
+  notificationSentAt: timestamp("notification_sent_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+}, (table) => [
+  check("incidents_source_type_check", sql`${table.sourceType} IN ('BACKUP', 'PROXMOX', 'MONITOR')`),
+  check("incidents_severity_check", sql`${table.severity} IN ('INFO', 'WARN', 'CRIT')`),
+  check("incidents_state_check", sql`${table.state} IN ('OPEN', 'ACKED', 'RESOLVED')`),
+  uniqueIndex("incidents_source_fingerprint_idx").on(table.sourceFingerprint),
+  index("incidents_state_created_idx").on(table.state, table.createdAt),
+  index("incidents_source_idx").on(table.sourceType, table.sourceId),
+]);
 
 export const insertIncidentSchema = createInsertSchema(incidents).omit({ id: true, createdAt: true, updatedAt: true });
 export type InsertIncident = z.infer<typeof insertIncidentSchema>;
@@ -157,7 +186,11 @@ export const proxmoxHosts = pgTable("proxmox_hosts", {
   lastStatus: text("last_status").default("UNKNOWN"), // OK, WARN, CRIT, UNKNOWN
   lastStatusDetails: jsonb("last_status_details"),
   consecutiveFailures: integer("consecutive_failures").notNull().default(0),
-});
+}, (table) => [
+  check("proxmox_hosts_last_status_check", sql`${table.lastStatus} IS NULL OR ${table.lastStatus} IN ('OK', 'WARN', 'CRIT', 'UNKNOWN')`),
+  index("proxmox_hosts_enabled_idx").on(table.enabled),
+  index("proxmox_hosts_customer_id_idx").on(table.customerId),
+]);
 
 export const insertProxmoxHostSchema = createInsertSchema(proxmoxHosts).omit({
   id: true,
@@ -177,7 +210,10 @@ export const proxmoxChecks = pgTable("proxmox_checks", {
   storageType: text("storage_type"), // ZFS, MDADM, RAID, MIXED, UNKNOWN
   payloadJson: jsonb("payload_json"),
   monitoringError: text("monitoring_error"), // SSH_TIMEOUT, AUTH_FAILED, SUDO_DENIED, TOOL_MISSING
-});
+}, (table) => [
+  check("proxmox_checks_status_check", sql`${table.overallStatus} IN ('OK', 'WARN', 'CRIT', 'UNKNOWN')`),
+  index("proxmox_checks_host_checked_idx").on(table.hostId, table.checkedAt),
+]);
 
 export const insertProxmoxCheckSchema = createInsertSchema(proxmoxChecks).omit({ id: true });
 export type InsertProxmoxCheck = z.infer<typeof insertProxmoxCheckSchema>;
@@ -201,7 +237,12 @@ export const backupTargets = pgTable("backup_targets", {
   pollStatus: text("poll_status").default("UNKNOWN"), // OK, ERROR, UNKNOWN
   pollError: text("poll_error"),
   datastoresJson: jsonb("datastores_json"),
-});
+}, (table) => [
+  check("backup_targets_type_check", sql`${table.type} IN ('SYNOLOGY', 'PBS')`),
+  check("backup_targets_poll_status_check", sql`${table.pollStatus} IS NULL OR ${table.pollStatus} IN ('OK', 'ERROR', 'UNKNOWN')`),
+  index("backup_targets_enabled_idx").on(table.enabled),
+  index("backup_targets_customer_id_idx").on(table.customerId),
+]);
 
 export const insertBackupTargetSchema = createInsertSchema(backupTargets).omit({
   id: true,

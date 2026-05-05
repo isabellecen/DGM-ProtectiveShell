@@ -355,6 +355,7 @@ export default function Proxmox() {
 
   const { data: hosts, isLoading } = useQuery<ProxmoxHostWithCustomer[]>({
     queryKey: ["/api/proxmox-hosts"],
+    refetchInterval: 60_000,
   });
 
   const { data: customers } = useQuery<Customer[]>({
@@ -576,7 +577,9 @@ export default function Proxmox() {
                       variant="ghost"
                       onClick={(e) => {
                         e.stopPropagation();
-                        deleteMutation.mutate(host.id);
+                        if (window.confirm(`Remove ${host.name} from monitoring? Check history for this host will be deleted.`)) {
+                          deleteMutation.mutate(host.id);
+                        }
                       }}
                       data-testid={`button-delete-host-${host.id}`}
                     >

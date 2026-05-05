@@ -51,6 +51,7 @@ export interface IStorage {
   deleteRecipient(id: number): Promise<void>;
 
   getSettings(): Promise<AppSetting[]>;
+  getSettingValue(key: string): Promise<string | undefined>;
   upsertSetting(key: string, value: string): Promise<AppSetting>;
 
   getExpectedRuns(limit?: number): Promise<(ExpectedRun & WithJobName)[]>;
@@ -137,6 +138,10 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteCustomer(id: number): Promise<void> {
+    await db.update(jobs).set({ customerId: null }).where(eq(jobs.customerId, id));
+    await db.update(recipients).set({ customerId: null }).where(eq(recipients.customerId, id));
+    await db.update(proxmoxHosts).set({ customerId: null }).where(eq(proxmoxHosts.customerId, id));
+    await db.update(backupTargets).set({ customerId: null }).where(eq(backupTargets.customerId, id));
     await db.delete(customers).where(eq(customers.id, id));
   }
 
@@ -177,6 +182,10 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteJob(id: number): Promise<void> {
+    await db.update(emails).set({ matchedJobId: null, ingestedOk: false }).where(eq(emails.matchedJobId, id));
+    await db.delete(events).where(eq(events.jobId, id));
+    await db.delete(expectedRuns).where(eq(expectedRuns.jobId, id));
+    await db.delete(jobRules).where(eq(jobRules.jobId, id));
     await db.delete(jobs).where(eq(jobs.id, id));
   }
 
@@ -283,6 +292,15 @@ export class DatabaseStorage implements IStorage {
       ...setting,
       value: isSecretSettingKey(setting.key) ? "" : setting.value,
     }));
+  }
+
+  async getSettingValue(key: string): Promise<string | undefined> {
+    const [setting] = await db.select().from(appSettings).where(eq(appSettings.key, key));
+    if (!setting || setting.value == null) {
+      return undefined;
+    }
+    const value = isSecretSettingKey(key) ? decryptSecret(setting.value) : setting.value;
+    return value ?? undefined;
   }
 
   async upsertSetting(key: string, value: string): Promise<AppSetting> {

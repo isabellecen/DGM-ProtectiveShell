@@ -1,9 +1,11 @@
 import { build as esbuild } from "esbuild";
 import { build as viteBuild } from "vite";
-import { rm, readFile } from "fs/promises";
+import react from "@vitejs/plugin-react";
+import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
+import { rm, readFile } from "node:fs/promises";
+import path from "node:path";
 
-// server deps to bundle to reduce openat(2) syscalls
-// which helps cold start times
+// Server deps to bundle to reduce filesystem lookups during cold starts.
 const allowlist = [
   "@google/generative-ai",
   "axios",
@@ -36,7 +38,23 @@ async function buildAll() {
   await rm("dist", { recursive: true, force: true });
 
   console.log("building client...");
-  await viteBuild();
+  await viteBuild({
+    configFile: false,
+    plugins: [react(), runtimeErrorOverlay()],
+    resolve: {
+      preserveSymlinks: true,
+      alias: {
+        "@": path.resolve("client", "src"),
+        "@shared": path.resolve("shared"),
+        "@assets": path.resolve("attached_assets"),
+      },
+    },
+    root: path.resolve("client"),
+    build: {
+      outDir: path.resolve("dist/public"),
+      emptyOutDir: true,
+    },
+  });
 
   console.log("building server...");
   const pkg = JSON.parse(await readFile("package.json", "utf-8"));

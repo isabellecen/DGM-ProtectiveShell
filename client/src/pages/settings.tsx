@@ -247,6 +247,22 @@ export default function Settings() {
     },
   });
 
+  const testImapMutation = useMutation({
+    mutationFn: async () => apiRequest("POST", "/api/settings/test-imap"),
+    onSuccess: () => toast({ title: "IMAP connection succeeded" }),
+    onError: (err: Error) => {
+      toast({ title: "IMAP test failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const testSmtpMutation = useMutation({
+    mutationFn: async () => apiRequest("POST", "/api/settings/test-smtp"),
+    onSuccess: () => toast({ title: "SMTP connection succeeded" }),
+    onError: (err: Error) => {
+      toast({ title: "SMTP test failed", description: err.message, variant: "destructive" });
+    },
+  });
+
   const deleteRecipientMutation = useMutation({
     mutationFn: async (id: number) => {
       return apiRequest("DELETE", `/api/recipients/${id}`);
@@ -310,8 +326,17 @@ export default function Settings() {
 
         <TabsContent value="imap">
           <Card>
-            <CardHeader>
+            <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
               <CardTitle className="text-base">IMAP Configuration</CardTitle>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => testImapMutation.mutate()}
+                disabled={testImapMutation.isPending}
+                data-testid="button-test-imap"
+              >
+                {testImapMutation.isPending ? "Testing..." : "Test"}
+              </Button>
             </CardHeader>
             <CardContent className="space-y-4">
               <SettingField
@@ -358,8 +383,17 @@ export default function Settings() {
 
         <TabsContent value="smtp">
           <Card>
-            <CardHeader>
+            <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
               <CardTitle className="text-base">SMTP Configuration</CardTitle>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => testSmtpMutation.mutate()}
+                disabled={testSmtpMutation.isPending}
+                data-testid="button-test-smtp"
+              >
+                {testSmtpMutation.isPending ? "Testing..." : "Test"}
+              </Button>
             </CardHeader>
             <CardContent className="space-y-4">
               <SettingField
@@ -475,7 +509,11 @@ export default function Settings() {
                               <Button
                                 size="icon"
                                 variant="ghost"
-                                onClick={() => deleteRecipientMutation.mutate(r.id)}
+                                onClick={() => {
+                                  if (window.confirm(`Remove recipient ${r.name}?`)) {
+                                    deleteRecipientMutation.mutate(r.id);
+                                  }
+                                }}
                                 data-testid={`button-delete-recipient-${r.id}`}
                               >
                                 <Trash2 className="h-3.5 w-3.5" />

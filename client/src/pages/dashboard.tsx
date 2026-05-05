@@ -95,6 +95,7 @@ function LoadingSkeleton() {
 export default function Dashboard() {
   const { data: stats, isLoading } = useQuery<DashboardStats>({
     queryKey: ["/api/dashboard/stats"],
+    refetchInterval: 30_000,
   });
 
   if (isLoading || !stats) {

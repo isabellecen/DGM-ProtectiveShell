@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/status-badge";
 import {
@@ -38,6 +39,16 @@ interface JobWithCustomer extends Job {
   customerName?: string;
 }
 
+const weekDays = [
+  ["sunday", "Sun"],
+  ["monday", "Mon"],
+  ["tuesday", "Tue"],
+  ["wednesday", "Wed"],
+  ["thursday", "Thu"],
+  ["friday", "Fri"],
+  ["saturday", "Sat"],
+] as const;
+
 function JobFormDialog({
   job,
   customers,
@@ -60,8 +71,10 @@ function JobFormDialog({
   const [scheduleType, setScheduleType] = useState(job?.scheduleType || "daily");
   const [scheduleTime, setScheduleTime] = useState(job?.scheduleTime || "02:00");
   const [windowHours, setWindowHours] = useState(job?.windowHours?.toString() || "6");
+  const [longWindowHours, setLongWindowHours] = useState(job?.longWindowHours?.toString() || "24");
   const [enabled, setEnabled] = useState(job?.enabled ?? true);
   const [longRunning, setLongRunning] = useState(job?.longRunning ?? false);
+  const [daysOfWeek, setDaysOfWeek] = useState<string[]>(job?.daysOfWeek || []);
 
   const mutation = useMutation({
     mutationFn: async () => {
@@ -74,7 +87,8 @@ function JobFormDialog({
         windowHours: parseInt(windowHours) || 6,
         enabled,
         longRunning,
-        longWindowHours: longRunning ? 24 : undefined,
+        longWindowHours: longRunning ? parseInt(longWindowHours) || 24 : undefined,
+        daysOfWeek: scheduleType === "weekly" ? daysOfWeek : [],
       };
       if (isEditing) {
         return apiRequest("PATCH", `/api/jobs/${job.id}`, payload);
@@ -174,6 +188,27 @@ function JobFormDialog({
               data-testid="input-window-hours"
             />
           </div>
+          {scheduleType === "weekly" && (
+            <div className="space-y-2">
+              <Label>Run Days</Label>
+              <div className="grid grid-cols-2 gap-2">
+                {weekDays.map(([value, label]) => (
+                  <label key={value} className="flex items-center gap-2 rounded-md border p-2 text-sm">
+                    <Checkbox
+                      checked={daysOfWeek.includes(value)}
+                      onCheckedChange={(checked) => {
+                        setDaysOfWeek((current) =>
+                          checked ? [...current, value] : current.filter((day) => day !== value),
+                        );
+                      }}
+                      data-testid={`checkbox-day-${value}`}
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="flex items-center justify-between gap-2">
             <Label htmlFor="long-running">Long-running job</Label>
             <Switch
@@ -183,6 +218,20 @@ function JobFormDialog({
               data-testid="switch-long-running"
             />
           </div>
+          {longRunning && (
+            <div>
+              <Label htmlFor="long-window-hours">Long Window (hours)</Label>
+              <Input
+                id="long-window-hours"
+                type="number"
+                min={1}
+                max={336}
+                value={longWindowHours}
+                onChange={(e) => setLongWindowHours(e.target.value)}
+                data-testid="input-long-window-hours"
+              />
+            </div>
+          )}
           <div className="flex items-center justify-between gap-2">
             <Label htmlFor="enabled">Enabled</Label>
             <Switch
@@ -195,7 +244,7 @@ function JobFormDialog({
           <Button
             className="w-full"
             onClick={() => mutation.mutate()}
-            disabled={!name || mutation.isPending}
+            disabled={!name || (scheduleType === "weekly" && daysOfWeek.length === 0) || mutation.isPending}
             data-testid="button-save-job"
           >
             {mutation.isPending ? "Saving..." : isEditing ? "Update Job" : "Create Job"}
@@ -326,7 +375,11 @@ export default function Jobs() {
                         <Button
                           size="icon"
                           variant="ghost"
-                          onClick={() => deleteMutation.mutate(job.id)}
+                          onClick={() => {
+                            if (window.confirm(`Delete backup job ${job.name}? Email matches and expected runs for this job will be unlinked.`)) {
+                              deleteMutation.mutate(job.id);
+                            }
+                          }}
                           data-testid={`button-delete-job-${job.id}`}
                         >
                           <Trash2 className="h-3.5 w-3.5" />

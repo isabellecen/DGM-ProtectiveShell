@@ -2,32 +2,62 @@ import type { Express } from "express";
 import type { Server } from "http";
 import { storage } from "./storage";
 import { pollBackupTargetAndPersist, runProxmoxHostCheck } from "./monitoring";
+import { testImapConnection } from "./emailPoller";
+import { testSmtpConnection } from "./notificationService";
 import { z } from "zod";
 
 const idParamSchema = z.coerce.number().int().positive();
 const nullableIdSchema = z.union([z.coerce.number().int().positive(), z.null()]);
 const systemTypeSchema = z.enum(["VEEAM", "PBS", "SYNOLOGY"]);
 const backupTargetTypeSchema = z.enum(["SYNOLOGY", "PBS"]);
+const scheduleTimeSchema = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
+const dayOfWeekSchema = z.enum([
+  "sunday",
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+]);
 
 const customerPatchSchema = z.object({
   name: z.string().trim().min(1).optional(),
 }).strict();
 const customerCreateSchema = customerPatchSchema.required();
 
-const jobCreateSchema = z.object({
+const jobBaseSchema = z.object({
   name: z.string().trim().min(1),
   systemType: systemTypeSchema,
   customerId: nullableIdSchema.optional(),
   scheduleType: z.enum(["daily", "weekly"]).default("daily"),
-  scheduleTime: z.string().regex(/^\d{2}:\d{2}$/).default("02:00"),
+  scheduleTime: scheduleTimeSchema.default("02:00"),
   windowHours: z.coerce.number().int().min(1).max(168).default(6),
   enabled: z.boolean().default(true),
   longRunning: z.boolean().default(false),
   longWindowHours: z.coerce.number().int().min(1).max(336).default(24),
-  daysOfWeek: z.array(z.string()).default([]),
+  daysOfWeek: z.array(dayOfWeekSchema).default([]),
 }).strict();
 
-const jobPatchSchema = jobCreateSchema.partial().strict();
+const jobCreateSchema = jobBaseSchema.superRefine((data, ctx) => {
+  if (data.scheduleType === "weekly" && data.daysOfWeek.length === 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["daysOfWeek"],
+      message: "Select at least one weekday for weekly jobs",
+    });
+  }
+});
+
+const jobPatchSchema = jobBaseSchema.partial().superRefine((data, ctx) => {
+  if (data.scheduleType === "weekly" && data.daysOfWeek?.length === 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["daysOfWeek"],
+      message: "Select at least one weekday for weekly jobs",
+    });
+  }
+});
 
 const proxmoxHostCreateSchema = z.object({
   name: z.string().trim().min(1),
@@ -430,6 +460,16 @@ app.post("/api/proxmox-hosts/:id/run-check", async (req, res) => {
     const { key, value } = settingSchema.parse(req.body);
     const result = await storage.upsertSetting(key, value || "");
     res.json(result);
+  });
+
+  app.post("/api/settings/test-imap", async (_req, res) => {
+    await testImapConnection();
+    res.json({ ok: true });
+  });
+
+  app.post("/api/settings/test-smtp", async (_req, res) => {
+    await testSmtpConnection();
+    res.json({ ok: true });
   });
 
   return httpServer;

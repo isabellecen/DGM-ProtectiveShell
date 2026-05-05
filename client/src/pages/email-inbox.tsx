@@ -488,10 +488,12 @@ export default function EmailInbox() {
 
   const { data: unmatchedEmails, isLoading: unmatchedLoading } = useQuery<Email[]>({
     queryKey: ["/api/emails/unmatched"],
+    refetchInterval: 60_000,
   });
 
   const { data: matchedEmails, isLoading: matchedLoading } = useQuery<EmailWithJob[]>({
     queryKey: ["/api/emails/matched"],
+    refetchInterval: 60_000,
   });
 
   const { data: customers } = useQuery<Customer[]>({

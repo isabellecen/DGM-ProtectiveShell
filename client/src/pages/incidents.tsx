@@ -26,6 +26,7 @@ export default function Incidents() {
 
   const { data: incidents, isLoading } = useQuery<Incident[]>({
     queryKey: ["/api/incidents"],
+    refetchInterval: 30_000,
   });
 
   const updateMutation = useMutation({

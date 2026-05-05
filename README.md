@@ -19,6 +19,8 @@ The application is built to help technical teams spot missed backups, unmatched 
 - Proxmox check history and per-host detail views
 - Incident state management
 - Notification recipient and route configuration
+- IMAP polling for backup notification ingestion
+- SMTP delivery for incident notifications
 - Dark/light theme support
 - Demo seed data in development
 
@@ -107,6 +109,8 @@ node dist/index.cjs
 | `npm run build` | Builds the frontend into `dist/public` and bundles the server to `dist/index.cjs` |
 | `npm start` | Starts the production server from `dist/index.cjs` |
 | `npm run check` | Runs TypeScript type checking |
+| `npm test` | Runs the focused server test suite |
+| `npm run verify` | Runs type checking and tests |
 | `npm run db:push` | Applies the Drizzle schema to the configured PostgreSQL database |
 
 ## Configuration
@@ -130,6 +134,8 @@ Environment variables:
 | `DISABLE_SCHEDULER` | Set to `1` to disable background polling and expected-run evaluation |
 | `PROXMOX_POLL_INTERVAL_MINUTES` | Proxmox health polling interval, default `5` |
 | `BACKUP_TARGET_POLL_INTERVAL_MINUTES` | Backup target capacity polling interval, default `30` |
+| `IMAP_POLL_INTERVAL_MINUTES` | IMAP polling interval, default `60` |
+| `LOGIN_RATE_LIMIT_MAX` | Login attempts allowed per 15-minute window, default `8` |
 | `ALLOW_INSECURE_TARGET_TLS` | Development escape hatch for self-signed target TLS |
 | `ALLOW_INSECURE_SSH_HOST_KEYS` | Development escape hatch for SSH host key verification |
 
@@ -140,6 +146,7 @@ Application settings are also editable from the Settings page. The current UI in
 - All `/api` routes require an authenticated admin session, except login/logout/session-check routes needed for auth.
 - Sessions are stored in PostgreSQL in the `user_sessions` table.
 - Proxmox host passwords, backup target passwords, and secret-like settings are encrypted before storage.
+- Mutating API requests reject cross-site origins, login attempts are rate-limited, and common browser security headers are set by the server.
 - Use a stable `SECRET_ENCRYPTION_KEY`; changing it can prevent previously encrypted secrets from decrypting.
 - In production, set `SESSION_SECRET` and either `ADMIN_PASSWORD` or `ADMIN_PASSWORD_HASH`.
 - Prefer SSH host key fingerprints and TLS fingerprints for monitored targets. The insecure bypass flags are intended only for isolated development or legacy environments.
@@ -173,7 +180,7 @@ shared/
   schema.ts            Drizzle tables and shared types
 
 script/
-  build.ts             Production build script
+  build.mjs            Production build script
 ```
 
 ## API Overview
@@ -193,6 +200,8 @@ The server exposes authenticated REST endpoints under `/api` for:
 - App settings
 
 See `server/routes.ts` for the exact route list and request schemas.
+
+For production deployment, operations, and a complete configuration reference, see [OPERATIONS.md](OPERATIONS.md).
 
 ## Production Build
 
@@ -216,7 +225,10 @@ When the scheduler is enabled:
 
 - Proxmox hosts are checked every `PROXMOX_POLL_INTERVAL_MINUTES`.
 - Backup targets are polled every `BACKUP_TARGET_POLL_INTERVAL_MINUTES`.
+- IMAP is polled every `IMAP_POLL_INTERVAL_MINUTES` when IMAP settings are configured.
 - Expected backup runs are produced every 15 minutes.
 - Pending expected runs are checked every minute. Missed deadlines become `MISSING` and create open critical backup incidents.
+- Open incidents with unsent notifications are delivered through SMTP every 5 minutes when SMTP settings and recipients are configured.
 
 Manual "run check" and "poll now" actions are available in the UI for Proxmox hosts and backup targets.
+The Settings page also includes IMAP and SMTP connection tests.

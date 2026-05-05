@@ -1,13 +1,19 @@
 {
-  "name": "rest-express",
+  "name": "protectiveshell",
   "version": "1.0.0",
   "type": "module",
   "license": "MIT",
+  "engines": {
+    "node": ">=20 <26",
+    "npm": ">=10"
+  },
   "scripts": {
-    "dev": "NODE_ENV=development tsx server/index.ts",
-    "build": "tsx script/build.ts",
-    "start": "NODE_ENV=production node dist/index.cjs",
+    "dev": "node script/run-with-env.cjs NODE_ENV=development tsx server/index.ts",
+    "build": "node script/build.mjs",
+    "start": "node script/run-with-env.cjs NODE_ENV=production node dist/index.cjs",
     "check": "tsc",
+    "test": "node --import ./script/register-ts-loader.mjs script/run-tests.ts",
+    "verify": "npm run check && npm run test",
     "db:push": "drizzle-kit push"
   },
   "dependencies": {

@@ -494,6 +494,7 @@ export default function BackupStorage() {
 
   const { data: targets, isLoading } = useQuery<TargetWithCustomer[]>({
     queryKey: ["/api/backup-targets"],
+    refetchInterval: 60_000,
   });
 
   const { data: customers } = useQuery<Customer[]>({
@@ -525,7 +526,10 @@ export default function BackupStorage() {
   };
 
   const handleDelete = (id: number) => {
-    deleteMutation.mutate(id);
+    const target = targets?.find((item) => item.id === id);
+    if (window.confirm(`Remove ${target?.name || "this backup target"} from monitoring?`)) {
+      deleteMutation.mutate(id);
+    }
   };
 
   const enabledTargets = targets?.filter((t) => t.enabled) || [];

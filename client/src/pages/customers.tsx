@@ -186,7 +186,11 @@ export default function Customers() {
                         <Button
                           size="icon"
                           variant="ghost"
-                          onClick={() => deleteMutation.mutate(customer.id)}
+                          onClick={() => {
+                            if (window.confirm(`Delete ${customer.name}? Related items will be kept but unassigned.`)) {
+                              deleteMutation.mutate(customer.id);
+                            }
+                          }}
                           data-testid={`button-delete-customer-${customer.id}`}
                         >
                           <Trash2 className="h-3.5 w-3.5" />

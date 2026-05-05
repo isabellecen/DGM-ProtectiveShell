@@ -57,12 +57,11 @@ export function encryptSecret(value: string | null | undefined): string | null |
   const ciphertext = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
   const tag = cipher.getAuthTag();
 
-  return [
-    ENCRYPTION_PREFIX,
+  return `${ENCRYPTION_PREFIX}${[
     iv.toString("base64url"),
     tag.toString("base64url"),
     ciphertext.toString("base64url"),
-  ].join(".");
+  ].join(".")}`;
 }
 
 export function decryptSecret(value: string | null | undefined): string | null | undefined {
@@ -70,7 +69,8 @@ export function decryptSecret(value: string | null | undefined): string | null |
     return value;
   }
 
-  const [, payload] = value.split(ENCRYPTION_PREFIX);
+  const [, rawPayload] = value.split(ENCRYPTION_PREFIX);
+  const payload = rawPayload.startsWith(".") ? rawPayload.slice(1) : rawPayload;
   const [ivRaw, tagRaw, ciphertextRaw] = payload.split(".");
   if (!ivRaw || !tagRaw || !ciphertextRaw) {
     throw new Error("Invalid encrypted secret format");
