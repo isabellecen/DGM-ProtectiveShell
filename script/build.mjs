@@ -5,33 +5,16 @@ import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
 import { rm, readFile } from "node:fs/promises";
 import path from "node:path";
 
-// Server deps to bundle to reduce filesystem lookups during cold starts.
-const allowlist = [
-  "@google/generative-ai",
-  "axios",
+const bundledServerDeps = [
   "connect-pg-simple",
-  "cors",
-  "date-fns",
   "drizzle-orm",
   "drizzle-zod",
   "express",
-  "express-rate-limit",
   "express-session",
-  "jsonwebtoken",
-  "memorystore",
-  "multer",
-  "nanoid",
-  "nodemailer",
-  "openai",
   "passport",
   "passport-local",
   "pg",
-  "stripe",
-  "uuid",
-  "ws",
-  "xlsx",
   "zod",
-  "zod-validation-error",
 ];
 
 async function buildAll() {
@@ -62,7 +45,7 @@ async function buildAll() {
     ...Object.keys(pkg.dependencies || {}),
     ...Object.keys(pkg.devDependencies || {}),
   ];
-  const externals = allDeps.filter((dep) => !allowlist.includes(dep));
+  const externals = allDeps.filter((dep) => !bundledServerDeps.includes(dep));
 
   await esbuild({
     entryPoints: ["server/index.ts"],

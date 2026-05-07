@@ -7,6 +7,7 @@ import { seedDatabase } from "./seed";
 import { registerAuth } from "./auth";
 import { registerAudit } from "./audit";
 import { enforceInsecureTargetPolicy, registerSecurity } from "./security";
+import { registerHealth } from "./health";
 import { startScheduler } from "./scheduler";
 import { pool } from "./db";
 import { ZodError } from "zod";
@@ -88,6 +89,8 @@ app.use((req, res, next) => {
 
 (async () => {
   const databaseReady = await checkDatabaseConnection();
+  const schedulerEnabled =
+    databaseReady && process.env.NODE_ENV !== "test" && process.env.DISABLE_SCHEDULER !== "1";
 
   if (databaseReady && (process.env.SEED_ON_BOOT === "1" || process.env.NODE_ENV !== "production")) {
     await seedDatabase().catch((err) => {
@@ -95,10 +98,11 @@ app.use((req, res, next) => {
     });
   }
 
+  registerHealth(app, { schedulerEnabled });
   registerAuth(app);
   registerAudit(app);
   await registerRoutes(httpServer, app);
-  if (databaseReady) {
+  if (schedulerEnabled) {
     startScheduler();
   }
 

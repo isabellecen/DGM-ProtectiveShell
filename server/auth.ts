@@ -5,6 +5,7 @@ import { Strategy as LocalStrategy } from "passport-local";
 import connectPgSimple from "connect-pg-simple";
 import crypto from "crypto";
 import { pool } from "./db";
+import { storage } from "./storage";
 
 declare global {
   namespace Express {
@@ -61,6 +62,34 @@ function verifyAdminPassword(password: string): boolean {
     (process.env.NODE_ENV === "production" ? undefined : "admin");
 
   return expectedPassword ? verifyPlainPassword(password, expectedPassword) : false;
+}
+
+function auditAuthEvent(
+  req: Request,
+  data: {
+    action: "login" | "login_failed" | "logout";
+    actor?: string;
+    statusCode: number;
+  },
+) {
+  const requestedUsername = typeof req.body?.username === "string" ? req.body.username : undefined;
+  const actor = data.actor || requestedUsername || "anonymous";
+
+  void storage.createAuditLog({
+    actor,
+    action: data.action,
+    entityType: "auth",
+    summary: `${actor} ${data.action}`,
+    metadataJson: {
+      method: req.method,
+      path: req.path,
+      statusCode: data.statusCode,
+      ip: req.ip || req.socket.remoteAddress || null,
+      username: requestedUsername || data.actor || null,
+    },
+  }).catch((err) => {
+    console.warn("Auth audit log write failed:", err);
+  });
 }
 
 export function registerAuth(app: Express) {
@@ -128,21 +157,25 @@ export function registerAuth(app: Express) {
     passport.authenticate("local", (err: Error | null, user: Express.User | false, info?: { message?: string }) => {
       if (err) return next(err);
       if (!user) {
+        auditAuthEvent(req, { action: "login_failed", statusCode: 401 });
         return res.status(401).json({ message: info?.message || "Invalid username or password" });
       }
 
       req.logIn(user, (loginErr) => {
         if (loginErr) return next(loginErr);
+        auditAuthEvent(req, { action: "login", actor: user.username, statusCode: 200 });
         return res.json({ user });
       });
     })(req, res, next);
   });
 
   app.post("/api/auth/logout", (req, res, next) => {
+    const username = req.user?.username || "anonymous";
     req.logout((err) => {
       if (err) return next(err);
       req.session.destroy((destroyErr) => {
         if (destroyErr) return next(destroyErr);
+        auditAuthEvent(req, { action: "logout", actor: username, statusCode: 204 });
         res.clearCookie("protectiveshell.sid");
         return res.status(204).send();
       });

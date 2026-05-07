@@ -21,6 +21,42 @@ const dayOfWeekSchema = z.enum([
   "saturday",
 ]);
 
+const allowedSettingKeys = [
+  "APP_TIMEZONE",
+  "IMAP_HOST",
+  "IMAP_PORT",
+  "IMAP_USER",
+  "IMAP_PASS",
+  "IMAP_FOLDER",
+  "IMAP_TLS",
+  "IMAP_FETCH_LIMIT",
+  "IMAP_POLL_INTERVAL",
+  "SMTP_HOST",
+  "SMTP_PORT",
+  "SMTP_USER",
+  "SMTP_PASS",
+  "SMTP_FROM",
+  "SMTP_STARTTLS",
+  "CONSECUTIVE_FAILURE_THRESHOLD",
+  "RETENTION_DAYS",
+  "SSH_TIMEOUT",
+  "DAILY_REPORT_TIME",
+] as const;
+
+type SettingKey = (typeof allowedSettingKeys)[number];
+
+const settingKeySchema = z.enum(allowedSettingKeys);
+const booleanSettingKeys = new Set<SettingKey>(["IMAP_TLS", "SMTP_STARTTLS"]);
+const numericSettingRanges: Partial<Record<SettingKey, { min: number; max: number }>> = {
+  IMAP_PORT: { min: 1, max: 65535 },
+  IMAP_FETCH_LIMIT: { min: 1, max: 200 },
+  IMAP_POLL_INTERVAL: { min: 1, max: 1440 },
+  SMTP_PORT: { min: 1, max: 65535 },
+  CONSECUTIVE_FAILURE_THRESHOLD: { min: 1, max: 100 },
+  RETENTION_DAYS: { min: 1, max: 3650 },
+  SSH_TIMEOUT: { min: 1, max: 300 },
+};
+
 const customerPatchSchema = z.object({
   name: z.string().trim().min(1).optional(),
 }).strict();
@@ -97,10 +133,87 @@ const recipientCreateSchema = z.object({
 }).strict();
 const recipientPatchSchema = recipientCreateSchema.partial().strict();
 
+const jobRuleCreateSchema = z.object({
+  jobId: idParamSchema,
+  senderMatch: z.string().trim().nullable().optional(),
+  subjectMatch: z.string().trim().nullable().optional(),
+  bodyMatch: z.string().trim().nullable().optional(),
+  priority: z.coerce.number().int().default(0),
+}).strict().superRefine((data, ctx) => {
+  if (![data.senderMatch, data.subjectMatch, data.bodyMatch].some((value) => !!value?.trim())) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["senderMatch"],
+      message: "Set at least one sender, subject, or body match value",
+    });
+  }
+});
+
 const settingSchema = z.object({
-  key: z.string().trim().min(1),
+  key: settingKeySchema,
   value: z.string().default(""),
-}).strict();
+}).strict().superRefine((data, ctx) => {
+  const value = data.value.trim();
+  if (value === "") {
+    return;
+  }
+
+  const range = numericSettingRanges[data.key];
+  if (range) {
+    const parsed = Number(value);
+    if (!Number.isInteger(parsed) || parsed < range.min || parsed > range.max) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["value"],
+        message: `${data.key} must be an integer from ${range.min} to ${range.max}`,
+      });
+    }
+  }
+
+  if (booleanSettingKeys.has(data.key) && value !== "0" && value !== "1") {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["value"],
+      message: `${data.key} must be 0 or 1`,
+    });
+  }
+
+  if (data.key === "APP_TIMEZONE") {
+    try {
+      new Intl.DateTimeFormat("en-US", { timeZone: value }).format(new Date());
+    } catch {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["value"],
+        message: "APP_TIMEZONE must be a valid IANA timezone",
+      });
+    }
+  }
+
+  if (data.key === "DAILY_REPORT_TIME" && !scheduleTimeSchema.safeParse(value).success) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["value"],
+      message: "DAILY_REPORT_TIME must use HH:MM format",
+    });
+  }
+});
+
+const notificationRouteCreateSchema = z.object({
+  scopeType: z.enum(["GLOBAL", "CUSTOMER", "JOB"]).default("GLOBAL"),
+  scopeId: nullableIdSchema.optional(),
+  eventType: z.enum(["FAIL", "MISSING", "WARN", "DAILY_REPORT", "MONITOR_DOWN"]),
+  severityMin: z.enum(["INFO", "WARN", "CRIT"]).default("WARN"),
+  recipientsJson: z.array(idParamSchema).default([]),
+}).strict().superRefine((data, ctx) => {
+  if (data.scopeType !== "GLOBAL" && !data.scopeId) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["scopeId"],
+      message: "Choose a customer or job for scoped routes",
+    });
+  }
+});
 
 const retentionRunSchema = z.object({
   retentionDays: z.coerce.number().int().min(1).max(3650).optional(),
@@ -250,14 +363,13 @@ export async function registerRoutes(
     res.json(checks);
   });
 
-app.post("/api/proxmox-hosts/:id/run-check", async (req, res) => {
-  const id = parseId(req.params.id);
-  const check = await runProxmoxHostCheck(id);
-  if (!check) return res.status(404).json({ message: "Host not found" });
+  app.post("/api/proxmox-hosts/:id/run-check", async (req, res) => {
+    const id = parseId(req.params.id);
+    const check = await runProxmoxHostCheck(id);
+    if (!check) return res.status(404).json({ message: "Host not found" });
 
-  res.json(check);
-});
-
+    res.json(check);
+  });
 
 
   // Backup Targets
@@ -371,13 +483,12 @@ app.post("/api/proxmox-hosts/:id/run-check", async (req, res) => {
   });
 
   app.post("/api/job-rules", async (req, res) => {
-    const { jobId, senderMatch, subjectMatch, bodyMatch, priority } = z.object({
-      jobId: idParamSchema,
-      senderMatch: z.string().trim().nullable().optional(),
-      subjectMatch: z.string().trim().nullable().optional(),
-      bodyMatch: z.string().trim().nullable().optional(),
-      priority: z.coerce.number().int().default(0),
-    }).strict().parse(req.body);
+    const { jobId, senderMatch, subjectMatch, bodyMatch, priority } = jobRuleCreateSchema.parse(req.body);
+    const job = await storage.getJob(jobId);
+    if (!job) {
+      return res.status(404).json({ message: "Job not found" });
+    }
+
     const result = await storage.createJobRule({
       jobId,
       senderMatch: senderMatch || null,
@@ -433,6 +544,11 @@ app.post("/api/proxmox-hosts/:id/run-check", async (req, res) => {
   app.post("/api/emails/:id/link-job", async (req, res) => {
     const emailId = parseId(req.params.id);
     const { jobId } = z.object({ jobId: idParamSchema }).strict().parse(req.body);
+    const job = await storage.getJob(jobId);
+    if (!job) {
+      return res.status(404).json({ message: "Job not found" });
+    }
+
     const result = await storage.linkEmailToJob(emailId, jobId);
     if (!result) {
       return res.status(404).json({ message: "Email not found" });
@@ -474,13 +590,14 @@ app.post("/api/proxmox-hosts/:id/run-check", async (req, res) => {
   });
 
   app.post("/api/notification-routes", async (req, res) => {
-    const { scopeType, scopeId, eventType, severityMin, recipientsJson } = z.object({
-      scopeType: z.enum(["GLOBAL", "CUSTOMER", "JOB"]).default("GLOBAL"),
-      scopeId: nullableIdSchema.optional(),
-      eventType: z.enum(["FAIL", "MISSING", "WARN", "DAILY_REPORT", "MONITOR_DOWN"]),
-      severityMin: z.enum(["INFO", "WARN", "CRIT"]).default("WARN"),
-      recipientsJson: z.array(idParamSchema).default([]),
-    }).strict().parse(req.body);
+    const { scopeType, scopeId, eventType, severityMin, recipientsJson } = notificationRouteCreateSchema.parse(req.body);
+    if (scopeType === "CUSTOMER" && scopeId && !(await storage.getCustomer(scopeId))) {
+      return res.status(404).json({ message: "Customer not found" });
+    }
+    if (scopeType === "JOB" && scopeId && !(await storage.getJob(scopeId))) {
+      return res.status(404).json({ message: "Job not found" });
+    }
+
     const result = await storage.createNotificationRoute({
       scopeType,
       scopeId: scopeId ?? null,
@@ -521,3 +638,9 @@ app.post("/api/proxmox-hosts/:id/run-check", async (req, res) => {
 
   return httpServer;
 }
+
+export const routeInternals = {
+  jobRuleCreateSchema,
+  notificationRouteCreateSchema,
+  settingSchema,
+};

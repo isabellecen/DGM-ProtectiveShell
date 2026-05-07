@@ -157,11 +157,13 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteCustomer(id: number): Promise<void> {
-    await db.update(jobs).set({ customerId: null }).where(eq(jobs.customerId, id));
-    await db.update(recipients).set({ customerId: null }).where(eq(recipients.customerId, id));
-    await db.update(proxmoxHosts).set({ customerId: null }).where(eq(proxmoxHosts.customerId, id));
-    await db.update(backupTargets).set({ customerId: null }).where(eq(backupTargets.customerId, id));
-    await db.delete(customers).where(eq(customers.id, id));
+    await db.transaction(async (tx) => {
+      await tx.update(jobs).set({ customerId: null }).where(eq(jobs.customerId, id));
+      await tx.update(recipients).set({ customerId: null }).where(eq(recipients.customerId, id));
+      await tx.update(proxmoxHosts).set({ customerId: null }).where(eq(proxmoxHosts.customerId, id));
+      await tx.update(backupTargets).set({ customerId: null }).where(eq(backupTargets.customerId, id));
+      await tx.delete(customers).where(eq(customers.id, id));
+    });
   }
 
   async getJobs(): Promise<(Job & WithCustomerName)[]> {
@@ -201,15 +203,17 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteJob(id: number): Promise<void> {
-    await db
-      .update(incidents)
-      .set({ state: "RESOLVED", updatedAt: new Date() })
-      .where(and(eq(incidents.sourceType, "BACKUP"), eq(incidents.sourceId, id), ne(incidents.state, "RESOLVED")));
-    await db.update(emails).set({ matchedJobId: null, ingestedOk: false }).where(eq(emails.matchedJobId, id));
-    await db.delete(events).where(eq(events.jobId, id));
-    await db.delete(expectedRuns).where(eq(expectedRuns.jobId, id));
-    await db.delete(jobRules).where(eq(jobRules.jobId, id));
-    await db.delete(jobs).where(eq(jobs.id, id));
+    await db.transaction(async (tx) => {
+      await tx
+        .update(incidents)
+        .set({ state: "RESOLVED", updatedAt: new Date() })
+        .where(and(eq(incidents.sourceType, "BACKUP"), eq(incidents.sourceId, id), ne(incidents.state, "RESOLVED")));
+      await tx.update(emails).set({ matchedJobId: null, ingestedOk: false }).where(eq(emails.matchedJobId, id));
+      await tx.delete(events).where(eq(events.jobId, id));
+      await tx.delete(expectedRuns).where(eq(expectedRuns.jobId, id));
+      await tx.delete(jobRules).where(eq(jobRules.jobId, id));
+      await tx.delete(jobs).where(eq(jobs.id, id));
+    });
   }
 
   async getProxmoxHosts(): Promise<(ProxmoxHost & WithCustomerName)[]> {
@@ -259,12 +263,14 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteProxmoxHost(id: number): Promise<void> {
-    await db
-      .update(incidents)
-      .set({ state: "RESOLVED", updatedAt: new Date() })
-      .where(and(eq(incidents.sourceType, "PROXMOX"), eq(incidents.sourceId, id), ne(incidents.state, "RESOLVED")));
-    await db.delete(proxmoxChecks).where(eq(proxmoxChecks.hostId, id));
-    await db.delete(proxmoxHosts).where(eq(proxmoxHosts.id, id));
+    await db.transaction(async (tx) => {
+      await tx
+        .update(incidents)
+        .set({ state: "RESOLVED", updatedAt: new Date() })
+        .where(and(eq(incidents.sourceType, "PROXMOX"), eq(incidents.sourceId, id), ne(incidents.state, "RESOLVED")));
+      await tx.delete(proxmoxChecks).where(eq(proxmoxChecks.hostId, id));
+      await tx.delete(proxmoxHosts).where(eq(proxmoxHosts.id, id));
+    });
   }
 
   async getIncidents(): Promise<Incident[]> {
@@ -447,6 +453,9 @@ export class DatabaseStorage implements IStorage {
         .orderBy(desc(expectedRuns.scheduledFor))
         .limit(1);
       const [job] = await tx.select().from(jobs).where(eq(jobs.id, jobId));
+      if (!job) {
+        return undefined;
+      }
 
       const [existingEvent] = await tx.select().from(events).where(eq(events.emailId, emailId)).limit(1);
       const [event] = existingEvent
@@ -590,11 +599,13 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteBackupTarget(id: number): Promise<void> {
-    await db
-      .update(incidents)
-      .set({ state: "RESOLVED", updatedAt: new Date() })
-      .where(and(eq(incidents.sourceType, "MONITOR"), eq(incidents.sourceId, id), ne(incidents.state, "RESOLVED")));
-    await db.delete(backupTargets).where(eq(backupTargets.id, id));
+    await db.transaction(async (tx) => {
+      await tx
+        .update(incidents)
+        .set({ state: "RESOLVED", updatedAt: new Date() })
+        .where(and(eq(incidents.sourceType, "MONITOR"), eq(incidents.sourceId, id), ne(incidents.state, "RESOLVED")));
+      await tx.delete(backupTargets).where(eq(backupTargets.id, id));
+    });
   }
 
   async getNotificationRoutes(): Promise<NotificationRoute[]> {
@@ -626,53 +637,55 @@ export class DatabaseStorage implements IStorage {
   async purgeOldData(retentionDays: number): Promise<RetentionSummary> {
     const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
 
-    const deletedEvents = await db
-      .delete(events)
-      .where(sql`
-        ${events.receivedAt} < ${cutoff}
-        OR ${events.expectedRunId} IN (
-          SELECT id FROM ${expectedRuns}
-          WHERE ${expectedRuns.deadlineAt} < ${cutoff}
-            AND ${expectedRuns.status} <> 'PENDING'
-        )
-        OR ${events.emailId} IN (
-          SELECT id FROM ${emails}
-          WHERE ${emails.receivedAt} IS NOT NULL
-            AND ${emails.receivedAt} < ${cutoff}
-        )
-      `)
-      .returning({ id: events.id });
+    return db.transaction(async (tx) => {
+      const deletedEvents = await tx
+        .delete(events)
+        .where(sql`
+          ${events.receivedAt} < ${cutoff}
+          OR ${events.expectedRunId} IN (
+            SELECT id FROM ${expectedRuns}
+            WHERE ${expectedRuns.deadlineAt} < ${cutoff}
+              AND ${expectedRuns.status} <> 'PENDING'
+          )
+          OR ${events.emailId} IN (
+            SELECT id FROM ${emails}
+            WHERE ${emails.receivedAt} IS NOT NULL
+              AND ${emails.receivedAt} < ${cutoff}
+          )
+        `)
+        .returning({ id: events.id });
 
-    const deletedExpectedRuns = await db
-      .delete(expectedRuns)
-      .where(and(lt(expectedRuns.deadlineAt, cutoff), ne(expectedRuns.status, "PENDING")))
-      .returning({ id: expectedRuns.id });
+      const deletedExpectedRuns = await tx
+        .delete(expectedRuns)
+        .where(and(lt(expectedRuns.deadlineAt, cutoff), ne(expectedRuns.status, "PENDING")))
+        .returning({ id: expectedRuns.id });
 
-    const deletedEmails = await db
-      .delete(emails)
-      .where(sql`${emails.receivedAt} IS NOT NULL AND ${emails.receivedAt} < ${cutoff}`)
-      .returning({ id: emails.id });
+      const deletedEmails = await tx
+        .delete(emails)
+        .where(sql`${emails.receivedAt} IS NOT NULL AND ${emails.receivedAt} < ${cutoff}`)
+        .returning({ id: emails.id });
 
-    const deletedProxmoxChecks = await db
-      .delete(proxmoxChecks)
-      .where(lt(proxmoxChecks.checkedAt, cutoff))
-      .returning({ id: proxmoxChecks.id });
+      const deletedProxmoxChecks = await tx
+        .delete(proxmoxChecks)
+        .where(lt(proxmoxChecks.checkedAt, cutoff))
+        .returning({ id: proxmoxChecks.id });
 
-    const deletedIncidents = await db
-      .delete(incidents)
-      .where(and(lt(incidents.updatedAt, cutoff), ne(incidents.state, "OPEN")))
-      .returning({ id: incidents.id });
+      const deletedIncidents = await tx
+        .delete(incidents)
+        .where(and(lt(incidents.updatedAt, cutoff), ne(incidents.state, "OPEN")))
+        .returning({ id: incidents.id });
 
-    await db.delete(rateLimitHits).where(lt(rateLimitHits.resetAt, new Date()));
+      await tx.delete(rateLimitHits).where(lt(rateLimitHits.resetAt, new Date()));
 
-    return {
-      cutoff,
-      deletedEvents: deletedEvents.length,
-      deletedExpectedRuns: deletedExpectedRuns.length,
-      deletedEmails: deletedEmails.length,
-      deletedProxmoxChecks: deletedProxmoxChecks.length,
-      deletedIncidents: deletedIncidents.length,
-    };
+      return {
+        cutoff,
+        deletedEvents: deletedEvents.length,
+        deletedExpectedRuns: deletedExpectedRuns.length,
+        deletedEmails: deletedEmails.length,
+        deletedProxmoxChecks: deletedProxmoxChecks.length,
+        deletedIncidents: deletedIncidents.length,
+      };
+    });
   }
 
   async getDashboardStats() {

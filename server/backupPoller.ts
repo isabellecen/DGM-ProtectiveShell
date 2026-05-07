@@ -1,4 +1,4 @@
-// Backup Target Poller — connects to Synology DSM and PBS APIs to fetch real capacity data
+// Backup Target Poller - connects to Synology DSM and PBS APIs to fetch real capacity data
 import https from "https";
 import http from "http";
 import type { TLSSocket } from "tls";
@@ -21,7 +21,7 @@ type TargetInput = {
   allowInsecureTls?: boolean | null;
 };
 
-// ── Synology DSM API ────────────────────────────────────────────────────
+// Synology DSM API
 
 async function pollSynology(input: TargetInput): Promise<PollResult> {
   const base = `https://${input.host}:${input.port}/webapi`;
@@ -159,7 +159,7 @@ async function pollSynology(input: TargetInput): Promise<PollResult> {
     }
 
     if (volumes.length === 0) {
-      return { totalBytes: null, usedBytes: null, datastoresJson: null, pollStatus: "ERROR", pollError: "No volumes found — check user permissions" };
+      return { totalBytes: null, usedBytes: null, datastoresJson: null, pollStatus: "ERROR", pollError: "No volumes found - check user permissions" };
     }
 
     return {
@@ -183,7 +183,7 @@ async function pollSynology(input: TargetInput): Promise<PollResult> {
   }
 }
 
-// ── Proxmox Backup Server API ───────────────────────────────────────────
+// Proxmox Backup Server API
 
 async function pollPBS(input: TargetInput): Promise<PollResult> {
   const base = `https://${input.host}:${input.port}/api2/json`;
@@ -282,7 +282,7 @@ async function pollPBS(input: TargetInput): Promise<PollResult> {
   };
 }
 
-// ── Helpers ─────────────────────────────────────────────────────────────
+// Helpers
 
 function normalizeFingerprint(value: string): string {
   return value.replace(/^sha256:/i, "").replace(/[^a-z0-9]/gi, "").toLowerCase();
@@ -357,7 +357,7 @@ function fetchTargetApi(
   });
 }
 
-// ── Public API ──────────────────────────────────────────────────────────
+// Public API
 
 export async function pollBackupTarget(input: TargetInput): Promise<PollResult> {
   try {
@@ -372,7 +372,7 @@ export async function pollBackupTarget(input: TargetInput): Promise<PollResult> 
     if (msg.includes("ECONNREFUSED")) return { totalBytes: null, usedBytes: null, datastoresJson: null, pollStatus: "ERROR", pollError: "Connection refused: host unreachable" };
     if (msg.includes("ETIMEDOUT") || msg.includes("abort")) return { totalBytes: null, usedBytes: null, datastoresJson: null, pollStatus: "ERROR", pollError: "Connection timed out" };
     if (msg.includes("TLS_FINGERPRINT_MISMATCH")) return { totalBytes: null, usedBytes: null, datastoresJson: null, pollStatus: "ERROR", pollError: "TLS certificate fingerprint mismatch" };
-    if (msg.includes("SELF_SIGNED") || msg.includes("UNABLE_TO_VERIFY")) return { totalBytes: null, usedBytes: null, datastoresJson: null, pollStatus: "ERROR", pollError: "TLS certificate error — self-signed cert" };
+    if (msg.includes("SELF_SIGNED") || msg.includes("UNABLE_TO_VERIFY")) return { totalBytes: null, usedBytes: null, datastoresJson: null, pollStatus: "ERROR", pollError: "TLS certificate error - self-signed cert" };
     return { totalBytes: null, usedBytes: null, datastoresJson: null, pollStatus: "ERROR", pollError: msg };
   }
 }
