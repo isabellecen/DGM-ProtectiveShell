@@ -20,6 +20,7 @@ import {
 } from "@shared/schema";
 import { decryptSecret, encryptSecret, isSecretSettingKey } from "./crypto";
 import { detectEventStatus } from "./emailStatus";
+import { syncBackupEmailIncident } from "./backupIncidents";
 
 type WithCustomerName = { customerName?: string | null };
 type WithJobName = { jobName?: string | null };
@@ -200,6 +201,10 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteJob(id: number): Promise<void> {
+    await db
+      .update(incidents)
+      .set({ state: "RESOLVED", updatedAt: new Date() })
+      .where(and(eq(incidents.sourceType, "BACKUP"), eq(incidents.sourceId, id), ne(incidents.state, "RESOLVED")));
     await db.update(emails).set({ matchedJobId: null, ingestedOk: false }).where(eq(emails.matchedJobId, id));
     await db.delete(events).where(eq(events.jobId, id));
     await db.delete(expectedRuns).where(eq(expectedRuns.jobId, id));
@@ -254,6 +259,10 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteProxmoxHost(id: number): Promise<void> {
+    await db
+      .update(incidents)
+      .set({ state: "RESOLVED", updatedAt: new Date() })
+      .where(and(eq(incidents.sourceType, "PROXMOX"), eq(incidents.sourceId, id), ne(incidents.state, "RESOLVED")));
     await db.delete(proxmoxChecks).where(eq(proxmoxChecks.hostId, id));
     await db.delete(proxmoxHosts).where(eq(proxmoxHosts.id, id));
   }
@@ -437,6 +446,7 @@ export class DatabaseStorage implements IStorage {
         )
         .orderBy(desc(expectedRuns.scheduledFor))
         .limit(1);
+      const [job] = await tx.select().from(jobs).where(eq(jobs.id, jobId));
 
       const [existingEvent] = await tx.select().from(events).where(eq(events.emailId, emailId)).limit(1);
       const [event] = existingEvent
@@ -473,6 +483,18 @@ export class DatabaseStorage implements IStorage {
           .set({ status, linkedEventId: event.id })
           .where(eq(expectedRuns.id, run.id));
       }
+
+      await syncBackupEmailIncident({
+        client: tx as unknown as Parameters<typeof syncBackupEmailIncident>[0]["client"],
+        jobId,
+        jobName: job?.name,
+        emailId,
+        expectedRunId: run?.id ?? null,
+        status,
+        receivedAt,
+        subject: email.subject,
+        snippet: email.snippet,
+      });
 
       return result;
     });
@@ -568,6 +590,10 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteBackupTarget(id: number): Promise<void> {
+    await db
+      .update(incidents)
+      .set({ state: "RESOLVED", updatedAt: new Date() })
+      .where(and(eq(incidents.sourceType, "MONITOR"), eq(incidents.sourceId, id), ne(incidents.state, "RESOLVED")));
     await db.delete(backupTargets).where(eq(backupTargets.id, id));
   }
 

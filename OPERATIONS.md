@@ -248,7 +248,7 @@ Secret-like setting keys ending in `PASS`, `PASSWORD`, `SECRET`, `TOKEN`, `PRIVA
 | --- | --- | --- | --- | --- |
 | `NODE_ENV` | `development` if omitted by scripts | Production: yes | Yes | Controls production behavior. In production, required secrets are enforced and static files are served from `dist/public`. |
 | `PORT` | `5000` | No | Yes | HTTP port used by the Node process. |
-| `APP_TIMEZONE` | `UTC` fallback | Recommended | Scheduler reads DB/env during run | Default timezone for expected backup run calculations. Can be overridden by Settings `APP_TIMEZONE`. Use an IANA name such as `America/Phoenix`. |
+| `APP_TIMEZONE` | `UTC` fallback | Recommended | Scheduler reads DB/env during run | Default timezone for expected backup run calculations and daily reports. Can be overridden by Settings `APP_TIMEZONE`. Use an IANA name such as `America/Phoenix`; invalid values fall back to `UTC`. |
 | `DATABASE_URL` | none | Yes | Yes | PostgreSQL connection string. The app will not boot without it. |
 | `SEED_ON_BOOT` | `0` in production | No | Yes | When `1`, seeds demo data if the database has no customers. Development mode also seeds automatically. |
 | `DISABLE_SCHEDULER` | `0` | No | Yes | When `1`, disables all background workers. Useful for migrations, maintenance, or running a second web-only instance. |
@@ -337,7 +337,7 @@ The Settings page writes to the `app_settings` table. Secret values are encrypte
 
 | Setting key | Used today | Description |
 | --- | --- | --- |
-| `APP_TIMEZONE` | Yes | Timezone used by expected-run scheduling. Overrides environment `APP_TIMEZONE`. |
+| `APP_TIMEZONE` | Yes | Timezone used by expected-run scheduling and daily report due checks. Overrides environment `APP_TIMEZONE`; invalid values fall back to `UTC`. |
 | `IMAP_HOST` | Yes | IMAP hostname. |
 | `IMAP_PORT` | Yes | IMAP port. |
 | `IMAP_USER` | Yes | IMAP username. |
@@ -389,7 +389,7 @@ All workers run inside the main Node process unless `DISABLE_SCHEDULER=1`.
 | --- | --- | --- |
 | Proxmox polling | `PROXMOX_POLL_INTERVAL_MINUTES`, default `5` | SSHes into enabled Proxmox hosts and stores health checks. Opens incidents for repeated unreachable hosts or degraded health. |
 | Backup target polling | `BACKUP_TARGET_POLL_INTERVAL_MINUTES`, default `30` | Polls enabled Synology/PBS targets for capacity. Opens incidents for poll errors or high usage. |
-| IMAP polling | `IMAP_POLL_INTERVAL_MINUTES`, default `60` | Reads new email UIDs, stores messages, applies job rules, creates events, and links expected runs. |
+| IMAP polling | `IMAP_POLL_INTERVAL_MINUTES`, default `60` | Reads new email UIDs, stores messages, applies job rules, creates events, links expected runs, and syncs backup incidents for matched failure/warning/OK emails. |
 | Expected-run producer | fixed `15` minutes | Creates pending expected runs for enabled jobs. |
 | Expected-run deadline evaluator | fixed `1` minute | Marks overdue pending runs as `MISSING` and opens deduplicated critical incidents. |
 | Notification sender | fixed `5` minutes | Sends SMTP notifications for open incidents that have not been notified. |
@@ -436,6 +436,7 @@ When a rule matches:
 - The email is marked as ingested.
 - An event is created with status `OK`, `WARN`, `FAIL`, or `UNKNOWN`.
 - A pending expected run for that job is linked if the email arrived within its scheduled window.
+- `FAIL` and `WARN` events open or update a `BACKUP` incident for the expected run or email. `OK` events resolve the matching backup-status incident.
 
 Status detection is keyword-based:
 
@@ -509,9 +510,12 @@ PBS polling authenticates to `/api2/json/access/ticket`, lists datastores, reads
 Incidents are created from:
 
 - Missed expected backup runs
+- Matched backup notification emails with `FAIL` or `WARN` status
 - Proxmox unreachable/degraded health
 - Backup target poll failures or high capacity usage
 - Seed/demo data in development
+
+Matched backup notification emails with `OK` status resolve the matching backup-status incident. Deleting a job, Proxmox host, or backup target resolves incidents tied to that monitored source so stale open incidents are not left behind.
 
 Incident states:
 

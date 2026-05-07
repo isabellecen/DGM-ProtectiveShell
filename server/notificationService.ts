@@ -79,7 +79,7 @@ export async function sendDailyReportIfDue(now = new Date()) {
     return;
   }
 
-  const timezone = (await setting("APP_TIMEZONE")) || "UTC";
+  const timezone = normalizeTimezone((await setting("APP_TIMEZONE")) || "UTC");
   const local = localDateTimeParts(now, timezone);
   const localMinute = `${local.hour}:${local.minute}`;
   if (localMinute !== reportTime) {
@@ -141,6 +141,15 @@ export async function sendDailyReportIfDue(now = new Date()) {
     await storage.upsertSetting("DAILY_REPORT_LAST_SENT_DATE", dateKey);
   } finally {
     client.close();
+  }
+}
+
+export function normalizeTimezone(timezone: string): string {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format(new Date());
+    return timezone;
+  } catch {
+    return "UTC";
   }
 }
 

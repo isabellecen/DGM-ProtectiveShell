@@ -12,6 +12,7 @@ The application is built to help technical teams spot missed backups, unmatched 
 - Backup job tracking for Veeam, Proxmox Backup Server, and Synology jobs
 - Expected-run scheduling with missed-backup incident creation
 - Email inbox workflow for unmatched and matched backup notification emails
+- Backup email failure/warning incident creation and OK-state incident resolution
 - Job matching rules for linking backup emails to backup jobs
 - Backup target capacity monitoring for Synology DSM and Proxmox Backup Server
 - Proxmox host health checks over SSH
@@ -236,6 +237,7 @@ When the scheduler is enabled:
 - IMAP is polled every `IMAP_POLL_INTERVAL_MINUTES` when IMAP settings are configured.
 - Expected backup runs are produced every 15 minutes.
 - Pending expected runs are checked every minute. Missed deadlines become `MISSING` and create open critical backup incidents.
+- Matched backup emails with `FAIL` or `WARN` status open or update backup incidents. Matched `OK` emails resolve the matching backup-status incident.
 - Open incidents with unsent notifications are delivered through SMTP every 5 minutes when SMTP settings and recipients are configured.
 
 Manual "run check" and "poll now" actions are available in the UI for Proxmox hosts and backup targets.

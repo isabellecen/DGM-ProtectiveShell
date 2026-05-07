@@ -8,10 +8,12 @@ import {
   events,
   expectedRuns,
   imapCheckpoints,
+  jobs,
   jobRules,
 } from "@shared/schema";
 export { detectEventStatus } from "./emailStatus";
 import { detectEventStatus } from "./emailStatus";
+import { syncBackupEmailIncident } from "./backupIncidents";
 
 type ImapSettings = {
   host: string;
@@ -158,6 +160,7 @@ async function persistParsedEmail(
     )
     .orderBy(desc(expectedRuns.scheduledFor))
     .limit(1);
+  const [job] = await db.select().from(jobs).where(eq(jobs.id, rule.jobId));
 
   const [event] = await db
     .insert(events)
@@ -181,6 +184,17 @@ async function persistParsedEmail(
       .set({ status, linkedEventId: event.id })
       .where(eq(expectedRuns.id, run.id));
   }
+
+  await syncBackupEmailIncident({
+    jobId: rule.jobId,
+    jobName: job?.name,
+    emailId: inserted.id,
+    expectedRunId: run?.id ?? null,
+    status,
+    receivedAt,
+    subject: parsed.subject,
+    snippet: parsed.snippet,
+  });
 }
 
 async function findMatchingRule(parsed: ParsedEmail) {
