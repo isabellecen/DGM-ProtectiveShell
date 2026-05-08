@@ -240,7 +240,7 @@ There are two configuration sources:
 
 For settings used by workers, database settings usually override environment variables. The major exception is scheduler interval values such as `PROXMOX_POLL_INTERVAL_MINUTES`, which are read from environment at startup.
 
-Secret-like setting keys ending in `PASS`, `PASSWORD`, `SECRET`, `TOKEN`, `PRIVATE_KEY`, or `API_KEY` are encrypted before storage and returned blank to the UI. Leaving a secret field blank in Settings preserves the existing stored value.
+Secret-like setting keys ending in `PASS`, `PASSWORD`, `SECRET`, `TOKEN`, `PRIVATE_KEY`, or `API_KEY` are encrypted before storage and returned blank to the UI. Leaving a secret field blank in Settings preserves the existing stored value. Use the clear action next to a secret field to remove the stored value.
 
 ## Environment Variables
 
@@ -326,6 +326,8 @@ Use the Settings page `Test` button on the SMTP tab to validate connection and a
 | `ALLOW_PRODUCTION_INSECURE_TARGETS` | `0` | No | Yes | Explicit production override required before insecure target TLS or SSH bypasses are accepted. |
 
 Use these only in isolated development or while enrolling fingerprints. For production, pin fingerprints per target or host.
+
+When a backup target TLS fingerprint is configured, ProtectiveShell validates it during the TLS handshake before sending target credentials.
 
 ### Development / Platform
 
@@ -468,6 +470,8 @@ For unmatched messages, operators can:
 - Create a new job from the email.
 - Link the email to an existing job.
 - Optionally create a sender-based matching rule.
+
+When an email is relinked to a different job or expected run, the previous expected run link is reset and the old backup-status incident is resolved so missed-run evaluation can happen normally.
 
 ## Proxmox Host Configuration
 

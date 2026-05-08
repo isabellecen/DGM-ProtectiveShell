@@ -52,6 +52,7 @@ import {
   buildRecipientPayload,
   buildSettingPayload,
 } from "@/lib/workflow-payloads";
+import { CLEAR_SECRET_SETTING_VALUE } from "@shared/settings";
 import type {
   AppSetting,
   AuditLog,
@@ -67,6 +68,7 @@ function SettingField({
   description,
   settingKey,
   type = "text",
+  clearableSecret = false,
   settings,
   onSave,
 }: {
@@ -74,6 +76,7 @@ function SettingField({
   description: string;
   settingKey: string;
   type?: string;
+  clearableSecret?: boolean;
   settings: Record<string, string>;
   onSave: (key: string, value: string) => void;
 }) {
@@ -103,6 +106,19 @@ function SettingField({
         >
           <Save className="h-3.5 w-3.5" />
         </Button>
+        {clearableSecret && (
+          <ConfirmActionButton
+            size="sm"
+            variant="outline"
+            title={`Clear ${label}?`}
+            description="The saved secret value will be removed."
+            confirmLabel="Clear"
+            onConfirm={() => onSave(settingKey, CLEAR_SECRET_SETTING_VALUE)}
+            data-testid={`button-clear-${settingKey}`}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </ConfirmActionButton>
+        )}
       </div>
       <p className="text-xs text-muted-foreground">{description}</p>
     </div>
@@ -656,6 +672,7 @@ export default function Settings() {
                 description="IMAP account password"
                 settingKey="IMAP_PASS"
                 type="password"
+                clearableSecret
                 settings={settings}
                 onSave={handleSaveSetting}
               />
@@ -713,6 +730,7 @@ export default function Settings() {
                 description="Authentication password"
                 settingKey="SMTP_PASS"
                 type="password"
+                clearableSecret
                 settings={settings}
                 onSave={handleSaveSetting}
               />

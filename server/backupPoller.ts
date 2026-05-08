@@ -321,44 +321,80 @@ function fetchTargetApi(
       reqOptions.agent = new https.Agent({ rejectUnauthorized });
     }
 
-    const timer = setTimeout(() => {
-      req.destroy();
-      reject(new Error("ETIMEDOUT"));
-    }, 15000);
+    let settled = false;
+    let requestSent = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const settleReject = (err: Error) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      reject(err);
+    };
+
+    const settleResolve = (value: unknown) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve(value);
+    };
+
+    const sendRequest = () => {
+      if (requestSent || settled) return;
+      requestSent = true;
+      try {
+        if (options?.body) {
+          req.write(options.body);
+        }
+        req.end();
+      } catch (err) {
+        settleReject(err instanceof Error ? err : new Error(String(err)));
+      }
+    };
 
     const req = lib.request(reqOptions, (res) => {
-      if (isHttps && expectedFingerprint) {
-        const cert = (res.socket as TLSSocket).getPeerCertificate();
-        const actualFingerprint = cert.fingerprint256 || cert.fingerprint || "";
-        if (!actualFingerprint || normalizeFingerprint(actualFingerprint) !== normalizeFingerprint(expectedFingerprint)) {
-          clearTimeout(timer);
-          res.resume();
-          reject(new Error("TLS_FINGERPRINT_MISMATCH"));
-          return;
-        }
-      }
-
       let body = "";
       res.on("data", (chunk) => (body += chunk));
       res.on("end", () => {
-        clearTimeout(timer);
         try {
-          resolve(JSON.parse(body));
+          settleResolve(JSON.parse(body));
         } catch {
-          resolve({ success: false, error: { code: res.statusCode, message: body.substring(0, 200) } });
+          settleResolve({ success: false, error: { code: res.statusCode, message: body.substring(0, 200) } });
         }
       });
     });
 
-    req.on("error", (e) => {
-      clearTimeout(timer);
-      reject(e);
-    });
+    timer = setTimeout(() => {
+      req.destroy();
+      settleReject(new Error("ETIMEDOUT"));
+    }, 15000);
 
-    if (options?.body) {
-      req.write(options.body);
+    if (isHttps) {
+      req.on("socket", (socket) => {
+        (socket as TLSSocket).once("secureConnect", () => {
+          if (expectedFingerprint) {
+            const cert = (socket as TLSSocket).getPeerCertificate();
+            const actualFingerprint = cert.fingerprint256 || cert.fingerprint || "";
+            if (
+              !actualFingerprint ||
+              normalizeFingerprint(actualFingerprint) !== normalizeFingerprint(expectedFingerprint)
+            ) {
+              req.destroy();
+              settleReject(new Error("TLS_FINGERPRINT_MISMATCH"));
+              return;
+            }
+          }
+
+          sendRequest();
+        });
+      });
+    } else {
+      sendRequest();
     }
-    req.end();
+
+    req.on("error", (e) => {
+      settleReject(e);
+    });
   });
 }
 

@@ -17,7 +17,10 @@ type BackupEmailIncidentInput = {
   snippet?: string | null;
 };
 
-function fingerprintFor(input: Pick<BackupEmailIncidentInput, "emailId" | "expectedRunId">): string {
+export function backupEmailIncidentFingerprint(input: {
+  emailId: number;
+  expectedRunId?: number | null;
+}): string {
   return input.expectedRunId
     ? `backup-status:expected-run:${input.expectedRunId}`
     : `backup-status:email:${input.emailId}`;
@@ -33,7 +36,7 @@ export function backupEmailIncidentPreview(input: BackupEmailIncidentInput) {
     return null;
   }
 
-  const sourceFingerprint = fingerprintFor(input);
+  const sourceFingerprint = backupEmailIncidentFingerprint(input);
   if (input.status === "OK") {
     return {
       action: "resolve" as const,
@@ -84,6 +87,7 @@ export async function syncBackupEmailIncident(input: BackupEmailIncidentInput): 
       .update(incidents)
       .set({
         severity: preview.severity,
+        sourceId: input.jobId,
         title: preview.title,
         details: preview.details,
         state: "OPEN",

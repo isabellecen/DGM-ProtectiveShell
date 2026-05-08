@@ -152,7 +152,7 @@ Environment variables:
 | `ALLOW_INSECURE_SSH_HOST_KEYS` | Development escape hatch for SSH host key verification |
 | `ALLOW_PRODUCTION_INSECURE_TARGETS` | Explicit production override for insecure target TLS/SSH bypasses |
 
-Application settings are also editable from the Settings page. The current UI includes IMAP, SMTP, recipients, notification routes, operations, audit history, and general settings such as `IMAP_HOST`, `IMAP_PORT`, `IMAP_USER`, `IMAP_PASS`, `IMAP_POLL_INTERVAL`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`, `APP_TIMEZONE`, `RETENTION_DAYS`, `SSH_TIMEOUT`, `CONSECUTIVE_FAILURE_THRESHOLD`, and `DAILY_REPORT_TIME`.
+Application settings are also editable from the Settings page. The current UI includes IMAP, SMTP, recipients, notification routes, operations, audit history, and general settings such as `IMAP_HOST`, `IMAP_PORT`, `IMAP_USER`, `IMAP_PASS`, `IMAP_POLL_INTERVAL`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`, `APP_TIMEZONE`, `RETENTION_DAYS`, `SSH_TIMEOUT`, `CONSECUTIVE_FAILURE_THRESHOLD`, and `DAILY_REPORT_TIME`. Secret fields are returned blank; saving a blank field preserves the current value, and the clear action removes the stored secret.
 
 ## Security Notes
 
@@ -163,7 +163,7 @@ Application settings are also editable from the Settings page. The current UI in
 - `/readyz` returns detailed database and scheduler diagnostics outside production, but production only returns the top-level readiness result.
 - Use a stable `SECRET_ENCRYPTION_KEY`; changing it can prevent previously encrypted secrets from decrypting.
 - In production, set `SESSION_SECRET` and either `ADMIN_PASSWORD` or `ADMIN_PASSWORD_HASH`.
-- Prefer SSH host key fingerprints and TLS fingerprints for monitored targets. The insecure bypass flags are intended only for isolated development or legacy environments; production requires `ALLOW_PRODUCTION_INSECURE_TARGETS=1` before those bypasses are accepted.
+- Prefer SSH host key fingerprints and TLS fingerprints for monitored targets. Pinned TLS fingerprints are validated before target credentials are sent. The insecure bypass flags are intended only for isolated development or legacy environments; production requires `ALLOW_PRODUCTION_INSECURE_TARGETS=1` before those bypasses are accepted.
 
 ## Project Structure
 

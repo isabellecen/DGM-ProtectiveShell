@@ -11,6 +11,7 @@ import {
   buildRecipientPayload,
   buildSettingPayload,
 } from "./workflow-payloads";
+import { CLEAR_SECRET_SETTING_VALUE } from "@shared/settings";
 
 test("login workflow sends entered credentials", () => {
   assert.deepEqual(buildLoginPayload("admin", "secret"), {
@@ -131,6 +132,10 @@ test("email and settings workflows build normalized API payloads", () => {
   assert.deepEqual(buildSettingPayload("IMAP_HOST", "mail.example.com"), {
     key: "IMAP_HOST",
     value: "mail.example.com",
+  });
+  assert.deepEqual(buildSettingPayload("IMAP_PASS", CLEAR_SECRET_SETTING_VALUE), {
+    key: "IMAP_PASS",
+    value: CLEAR_SECRET_SETTING_VALUE,
   });
 });
 

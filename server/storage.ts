@@ -18,9 +18,10 @@ import {
   auditLogs, type AuditLog, type InsertAuditLog,
   rateLimitHits,
 } from "@shared/schema";
+import { CLEAR_SECRET_SETTING_VALUE } from "@shared/settings";
 import { decryptSecret, encryptSecret, isSecretSettingKey } from "./crypto";
 import { detectEventStatus } from "./emailStatus";
-import { syncBackupEmailIncident } from "./backupIncidents";
+import { backupEmailIncidentFingerprint, syncBackupEmailIncident } from "./backupIncidents";
 
 type WithCustomerName = { customerName?: string | null };
 type WithJobName = { jobName?: string | null };
@@ -359,14 +360,19 @@ export class DatabaseStorage implements IStorage {
     if (!setting || setting.value == null) {
       return undefined;
     }
-    const value = isSecretSettingKey(key) ? decryptSecret(setting.value) : setting.value;
+    if (isSecretSettingKey(key)) {
+      const value = decryptSecret(setting.value);
+      return value || undefined;
+    }
+    const value = setting.value;
     return value ?? undefined;
   }
 
   async upsertSetting(key: string, value: string): Promise<AppSetting> {
     const [existing] = await db.select().from(appSettings).where(eq(appSettings.key, key));
     const secretValue = isSecretSettingKey(key);
-    const storedValue = secretValue ? encryptSecret(value) || "" : value;
+    const clearSecret = secretValue && value === CLEAR_SECRET_SETTING_VALUE;
+    const storedValue = clearSecret ? "" : secretValue ? encryptSecret(value) || "" : value;
 
     if (existing) {
       if (secretValue && value === "") {
@@ -484,13 +490,45 @@ export class DatabaseStorage implements IStorage {
         return undefined;
       }
 
+      const nextExpectedRunId = run?.id ?? null;
       const [existingEvent] = await tx.select().from(events).where(eq(events.emailId, emailId)).limit(1);
+      if (existingEvent) {
+        const previousExpectedRunId = existingEvent.expectedRunId;
+        const previousFingerprint = backupEmailIncidentFingerprint({
+          emailId,
+          expectedRunId: previousExpectedRunId,
+        });
+        const nextFingerprint = backupEmailIncidentFingerprint({
+          emailId,
+          expectedRunId: nextExpectedRunId,
+        });
+
+        if (previousExpectedRunId && previousExpectedRunId !== nextExpectedRunId) {
+          await tx
+            .update(expectedRuns)
+            .set({ status: "PENDING", linkedEventId: null })
+            .where(
+              and(
+                eq(expectedRuns.id, previousExpectedRunId),
+                eq(expectedRuns.linkedEventId, existingEvent.id),
+              ),
+            );
+        }
+
+        if (previousFingerprint !== nextFingerprint) {
+          await tx
+            .update(incidents)
+            .set({ state: "RESOLVED", updatedAt: new Date() })
+            .where(eq(incidents.sourceFingerprint, previousFingerprint));
+        }
+      }
+
       const [event] = existingEvent
         ? await tx
             .update(events)
             .set({
               jobId,
-              expectedRunId: run?.id ?? null,
+              expectedRunId: nextExpectedRunId,
               status,
               receivedAt,
             })
@@ -500,7 +538,7 @@ export class DatabaseStorage implements IStorage {
             .insert(events)
             .values({
               jobId,
-              expectedRunId: run?.id ?? null,
+              expectedRunId: nextExpectedRunId,
               status,
               receivedAt,
               emailId,
@@ -525,7 +563,7 @@ export class DatabaseStorage implements IStorage {
         jobId,
         jobName: job?.name,
         emailId,
-        expectedRunId: run?.id ?? null,
+        expectedRunId: nextExpectedRunId,
         status,
         receivedAt,
         subject: email.subject,

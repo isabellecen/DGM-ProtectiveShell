@@ -3,7 +3,15 @@ import test from "node:test";
 
 process.env.DATABASE_URL ||= "postgres://user:password@localhost:5432/protectiveshell_test";
 
-const { backupEmailIncidentPreview } = await import("./backupIncidents");
+const { backupEmailIncidentFingerprint, backupEmailIncidentPreview } = await import("./backupIncidents");
+
+test("backupEmailIncidentFingerprint prefers expected-run fingerprints", () => {
+  assert.equal(
+    backupEmailIncidentFingerprint({ emailId: 42, expectedRunId: 9 }),
+    "backup-status:expected-run:9",
+  );
+  assert.equal(backupEmailIncidentFingerprint({ emailId: 42 }), "backup-status:email:42");
+});
 
 test("backupEmailIncidentPreview opens incidents for failed and warning emails", () => {
   const failed = backupEmailIncidentPreview({

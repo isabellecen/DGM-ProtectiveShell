@@ -20,6 +20,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Mail,
   MailWarning,
@@ -40,6 +41,16 @@ import { buildEmailLinkPayload, buildJobPayload, buildJobRulePayload } from "@/l
 interface EmailWithJob extends Email {
   jobName?: string;
 }
+
+const weekDays = [
+  ["sunday", "Sun"],
+  ["monday", "Mon"],
+  ["tuesday", "Tue"],
+  ["wednesday", "Wed"],
+  ["thursday", "Thu"],
+  ["friday", "Fri"],
+  ["saturday", "Sat"],
+] as const;
 
 function detectSystemType(email: Email): string {
   const from = (email.fromAddr || "").toLowerCase();
@@ -163,6 +174,7 @@ function CreateJobFromEmailDialog({
   const [scheduleType, setScheduleType] = useState("daily");
   const [scheduleTime, setScheduleTime] = useState("02:00");
   const [windowHours, setWindowHours] = useState("6");
+  const [daysOfWeek, setDaysOfWeek] = useState<string[]>([]);
   const [enabled, setEnabled] = useState(true);
   const [createRule, setCreateRule] = useState(true);
 
@@ -177,6 +189,7 @@ function CreateJobFromEmailDialog({
         windowHours,
         enabled,
         longRunning: false,
+        daysOfWeek,
       });
       const jobRes = await apiRequest("POST", "/api/jobs", jobPayload);
       const newJob = await jobRes.json();
@@ -295,6 +308,27 @@ function CreateJobFromEmailDialog({
               data-testid="input-window-from-email"
             />
           </div>
+          {scheduleType === "weekly" && (
+            <div className="space-y-2">
+              <Label>Run Days</Label>
+              <div className="grid grid-cols-2 gap-2">
+                {weekDays.map(([value, label]) => (
+                  <label key={value} className="flex items-center gap-2 rounded-md border p-2 text-sm">
+                    <Checkbox
+                      checked={daysOfWeek.includes(value)}
+                      onCheckedChange={(checked) => {
+                        setDaysOfWeek((current) =>
+                          checked ? [...current, value] : current.filter((day) => day !== value),
+                        );
+                      }}
+                      data-testid={`checkbox-day-from-email-${value}`}
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="flex items-center justify-between gap-2">
             <Label htmlFor="enabled-from-email">Enabled</Label>
             <Switch
@@ -321,7 +355,7 @@ function CreateJobFromEmailDialog({
           <Button
             className="w-full"
             onClick={() => mutation.mutate()}
-            disabled={!name || mutation.isPending}
+            disabled={!name || (scheduleType === "weekly" && daysOfWeek.length === 0) || mutation.isPending}
             data-testid="button-confirm-create-job"
           >
             {mutation.isPending ? "Creating..." : "Create Job & Link Email"}
