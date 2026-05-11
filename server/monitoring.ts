@@ -4,6 +4,7 @@ import { collectProxmoxHealth } from "./proxmoxCollector";
 import { db } from "./db";
 import { backupTargets, incidents, proxmoxHosts } from "@shared/schema";
 import { storage } from "./storage";
+import { assertMonitoredTargetAllowed } from "./egress";
 
 export async function runProxmoxHostCheck(hostId: number) {
   const host = await storage.getProxmoxHost(hostId);
@@ -12,7 +13,21 @@ export async function runProxmoxHostCheck(hostId: number) {
   }
 
   const timeoutSeconds = await numericSetting("SSH_TIMEOUT", 20);
-  const result = await collectProxmoxHealth({
+  let result: Awaited<ReturnType<typeof collectProxmoxHealth>> | undefined;
+  try {
+    await assertMonitoredTargetAllowed(host.host);
+  } catch (err) {
+    result = {
+      overall_status: "UNKNOWN",
+      storage_type: "UNKNOWN",
+      components: {
+        smart: { status: "UNKNOWN", disks: [], disks_total: 0, disks_warning: 0, disks_failed: 0 },
+        meta: { hostname: "" },
+      },
+      monitoring_error: err instanceof Error ? `EGRESS_BLOCKED: ${err.message}` : "EGRESS_BLOCKED",
+    };
+  }
+  result ??= await collectProxmoxHealth({
     host: host.host,
     port: host.port,
     username: host.username,
@@ -79,7 +94,20 @@ export async function pollBackupTargetAndPersist(targetId: number) {
     return undefined;
   }
 
-  const result = await pollBackupTarget({
+  let result: Awaited<ReturnType<typeof pollBackupTarget>> | undefined;
+  try {
+    await assertMonitoredTargetAllowed(target.host);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Target host is blocked";
+    result = {
+      totalBytes: null,
+      usedBytes: null,
+      datastoresJson: null,
+      pollStatus: "ERROR",
+      pollError: `EGRESS_BLOCKED: ${message}`,
+    };
+  }
+  result ??= await pollBackupTarget({
     type: target.type as "SYNOLOGY" | "PBS",
     host: target.host,
     port: target.port,

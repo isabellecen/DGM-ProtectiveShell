@@ -1,5 +1,5 @@
 import { and, eq, lt } from "drizzle-orm";
-import { db } from "./db";
+import { db, pool } from "./db";
 import { expectedRuns, incidents, jobs, schedulerRuns } from "@shared/schema";
 import { pollImapInboxAndPersist } from "./emailPoller";
 import {
@@ -71,6 +71,43 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+export function advisoryLockKeysForWorker(workerName: string): [number, number] {
+  let high = 0x811c9dc5;
+  let low = 0x01000193;
+  for (let index = 0; index < workerName.length; index += 1) {
+    const code = workerName.charCodeAt(index);
+    high = Math.imul(high ^ code, 0x01000193);
+    low = Math.imul(low + code, 0x811c9dc5);
+  }
+  return [high | 0, low | 0];
+}
+
+async function withSchedulerLock<T>(
+  workerName: string,
+  task: () => Promise<T>,
+): Promise<{ locked: true; result: T } | { locked: false }> {
+  const client = await pool.connect();
+  const [key1, key2] = advisoryLockKeysForWorker(workerName);
+
+  try {
+    const lock = await client.query<{ locked: boolean }>(
+      "select pg_try_advisory_lock($1::integer, $2::integer) as locked",
+      [key1, key2],
+    );
+    if (!lock.rows[0]?.locked) {
+      return { locked: false };
+    }
+
+    try {
+      return { locked: true, result: await task() };
+    } finally {
+      await client.query("select pg_advisory_unlock($1::integer, $2::integer)", [key1, key2]);
+    }
+  } finally {
+    client.release();
+  }
+}
+
 function schedule(name: string, interval: number, task: () => Promise<void>) {
   let running = false;
   let currentStartedAt: Date | undefined;
@@ -87,9 +124,19 @@ function schedule(name: string, interval: number, task: () => Promise<void>) {
     running = true;
     const startedAt = new Date();
     currentStartedAt = startedAt;
-    await safeRecordSchedulerStatus(name, "RUNNING", { startedAt });
     try {
-      await task();
+      const lockResult = await withSchedulerLock(name, async () => {
+        await safeRecordSchedulerStatus(name, "RUNNING", { startedAt });
+        await task();
+      });
+      if (!lockResult.locked) {
+        await safeRecordSchedulerStatus(name, "SKIPPED", {
+          startedAt,
+          finishedAt: new Date(),
+          message: "Another process is running this worker",
+        });
+        return;
+      }
       const finishedAt = new Date();
       await safeRecordSchedulerStatus(name, "OK", {
         startedAt,
@@ -148,6 +195,10 @@ export function startScheduler() {
   schedule("retention", 24 * 60 * 60 * 1000, applyRetentionPolicy);
   schedule("daily-report", 60 * 1000, sendDailyReportIfDue);
 }
+
+export const schedulerInternals = {
+  advisoryLockKeysForWorker,
+};
 
 export function retentionDaysFromValue(value: string | undefined, fallback = 90): number {
   return positiveInteger(value, fallback);

@@ -4,6 +4,7 @@ import { storage } from "./storage";
 import { pollBackupTargetAndPersist, runProxmoxHostCheck } from "./monitoring";
 import { testImapConnection } from "./emailPoller";
 import { testSmtpConnection } from "./notificationService";
+import { assertMonitoredTargetAllowed } from "./egress";
 import { z } from "zod";
 
 const idParamSchema = z.coerce.number().int().positive();
@@ -241,6 +242,35 @@ function assertInsecureTargetAllowed(kind: "SSH host key" | "target TLS", allowI
   }
 }
 
+async function assertTargetHostAllowed(host: string) {
+  try {
+    await assertMonitoredTargetAllowed(host);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw badRequest(message);
+  }
+}
+
+async function assertRecipientsExist(recipientIds: number[]) {
+  const missing: number[] = [];
+  const disabled: number[] = [];
+  for (const id of recipientIds) {
+    const recipient = await storage.getRecipient(id);
+    if (!recipient) {
+      missing.push(id);
+    } else if (!recipient.enabled) {
+      disabled.push(id);
+    }
+  }
+
+  if (missing.length > 0) {
+    throw badRequest(`Unknown recipient id(s): ${missing.join(", ")}`);
+  }
+  if (disabled.length > 0) {
+    throw badRequest(`Disabled recipient id(s) cannot be used in routes: ${disabled.join(", ")}`);
+  }
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
@@ -327,6 +357,7 @@ export async function registerRoutes(
   app.post("/api/proxmox-hosts", async (req, res) => {
     const data = proxmoxHostCreateSchema.parse(req.body);
     assertInsecureTargetAllowed("SSH host key", data.allowInsecureHostKey);
+    await assertTargetHostAllowed(data.host);
     const result = await storage.createProxmoxHost({
       ...data,
       customerId: data.customerId ?? null,
@@ -342,6 +373,9 @@ export async function registerRoutes(
 
     const updateData = proxmoxHostPatchSchema.parse(req.body);
     assertInsecureTargetAllowed("SSH host key", updateData.allowInsecureHostKey);
+    if (updateData.host) {
+      await assertTargetHostAllowed(updateData.host);
+    }
 
     const result = await storage.updateProxmoxHost(id, updateData);
     if (!result) return res.status(404).json({ message: "Not found" });
@@ -390,6 +424,7 @@ export async function registerRoutes(
   app.post("/api/backup-targets", async (req, res) => {
     const data = backupTargetCreateSchema.parse(req.body);
     assertInsecureTargetAllowed("target TLS", data.allowInsecureTls);
+    await assertTargetHostAllowed(data.host);
     const result = await storage.createBackupTarget({
       ...data,
       port: data.port || (data.type === "PBS" ? 8007 : 443),
@@ -405,6 +440,9 @@ export async function registerRoutes(
     if (!existing) return res.status(404).json({ message: "Not found" });
     const updateData = backupTargetPatchSchema.parse(req.body);
     assertInsecureTargetAllowed("target TLS", updateData.allowInsecureTls);
+    if (updateData.host) {
+      await assertTargetHostAllowed(updateData.host);
+    }
     const result = await storage.updateBackupTarget(id, updateData);
     if (!result) return res.status(404).json({ message: "Not found" });
     res.json({ ...result, password: "***" });
@@ -592,6 +630,7 @@ export async function registerRoutes(
     if (scopeType === "JOB" && scopeId && !(await storage.getJob(scopeId))) {
       return res.status(404).json({ message: "Job not found" });
     }
+    await assertRecipientsExist(recipientsJson);
 
     const result = await storage.createNotificationRoute({
       scopeType,
@@ -638,4 +677,5 @@ export const routeInternals = {
   jobRuleCreateSchema,
   notificationRouteCreateSchema,
   settingSchema,
+  assertRecipientsExist,
 };

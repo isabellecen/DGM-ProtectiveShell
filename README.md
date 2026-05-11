@@ -151,6 +151,7 @@ Environment variables:
 | `ALLOW_INSECURE_TARGET_TLS` | Development escape hatch for self-signed target TLS |
 | `ALLOW_INSECURE_SSH_HOST_KEYS` | Development escape hatch for SSH host key verification |
 | `ALLOW_PRODUCTION_INSECURE_TARGETS` | Explicit production override for insecure target TLS/SSH bypasses |
+| `MONITORED_TARGET_ALLOW_CIDRS` | Optional comma-separated CIDR allowlist for monitored target hosts |
 
 Application settings are also editable from the Settings page. The current UI includes IMAP, SMTP, recipients, notification routes, operations, audit history, and general settings such as `IMAP_HOST`, `IMAP_PORT`, `IMAP_USER`, `IMAP_PASS`, `IMAP_POLL_INTERVAL`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`, `APP_TIMEZONE`, `RETENTION_DAYS`, `SSH_TIMEOUT`, `CONSECUTIVE_FAILURE_THRESHOLD`, and `DAILY_REPORT_TIME`. Secret fields are returned blank; saving a blank field preserves the current value, and the clear action removes the stored secret.
 
@@ -160,10 +161,12 @@ Application settings are also editable from the Settings page. The current UI in
 - Sessions are stored in PostgreSQL in the `user_sessions` table.
 - Proxmox host passwords, backup target passwords, and secret-like settings are encrypted before storage.
 - Mutating API requests reject cross-site origins, login attempts are rate-limited, and common browser security headers are set by the server.
+- Production responses include HSTS when `COOKIE_SECURE=1` or `TRUST_PROXY=1`.
 - `/readyz` returns detailed database and scheduler diagnostics outside production, but production only returns the top-level readiness result.
 - Use a stable `SECRET_ENCRYPTION_KEY`; changing it can prevent previously encrypted secrets from decrypting.
 - In production, set `SESSION_SECRET` and either `ADMIN_PASSWORD` or `ADMIN_PASSWORD_HASH`.
 - Prefer SSH host key fingerprints and TLS fingerprints for monitored targets. Pinned TLS fingerprints are validated before target credentials are sent. The insecure bypass flags are intended only for isolated development or legacy environments; production requires `ALLOW_PRODUCTION_INSECURE_TARGETS=1` before those bypasses are accepted.
+- Monitored SSH/HTTPS targets cannot resolve to loopback, link-local, multicast, unspecified, or metadata service addresses. Use `MONITORED_TARGET_ALLOW_CIDRS` when a deployment needs to permit a narrow internal range explicitly.
 
 ## Project Structure
 
@@ -247,6 +250,8 @@ Production builds intentionally omit development-only Vite helper plugins such a
 ## Test Coverage
 
 `npm run verify` runs TypeScript plus focused server and client regression tests. Current client coverage includes auth-cache behavior and workflow payload builders for login, jobs, email linking, backup targets, Proxmox hosts, settings, recipients, and notification routes.
+
+Database-backed integration checks are opt-in. Set `RUN_DB_INTEGRATION_TESTS=1` with a disposable `DATABASE_URL` before running `npm test` or `npm run verify`.
 
 ## Monitoring Behavior
 

@@ -267,6 +267,8 @@ Secret-like setting keys ending in `PASS`, `PASSWORD`, `SECRET`, `TOKEN`, `PRIVA
 | `COOKIE_SECURE` | `0`, or production with trusted proxy | Recommended in production | Yes | When `1`, session cookies require HTTPS. Set when served behind HTTPS. |
 | `LOGIN_RATE_LIMIT_MAX` | `8` | No | Yes | Maximum login attempts per IP in a 15-minute window. |
 
+In production, the server sends HSTS when `COOKIE_SECURE=1` or `TRUST_PROXY=1`.
+
 ### Secret Encryption
 
 | Variable | Default | Required | Restart needed | Description |
@@ -324,10 +326,13 @@ Use the Settings page `Test` button on the SMTP tab to validate connection and a
 | `ALLOW_INSECURE_TARGET_TLS` | `0` | No | Yes | Global escape hatch allowing self-signed or unverified HTTPS target certificates. Prefer per-target TLS fingerprints. Production also requires `ALLOW_PRODUCTION_INSECURE_TARGETS=1`. |
 | `ALLOW_INSECURE_SSH_HOST_KEYS` | `0` | No | Yes | Global escape hatch allowing unknown SSH host keys. Prefer per-host SSH fingerprints. Production also requires `ALLOW_PRODUCTION_INSECURE_TARGETS=1`. |
 | `ALLOW_PRODUCTION_INSECURE_TARGETS` | `0` | No | Yes | Explicit production override required before insecure target TLS or SSH bypasses are accepted. |
+| `MONITORED_TARGET_ALLOW_CIDRS` | none | No | Yes | Optional comma-separated CIDR allowlist for monitored target host addresses. |
 
 Use these only in isolated development or while enrolling fingerprints. For production, pin fingerprints per target or host.
 
 When a backup target TLS fingerprint is configured, ProtectiveShell validates it during the TLS handshake before sending target credentials.
+
+Monitored Proxmox and backup target hosts are resolved before save and before polling. Loopback, link-local, multicast, unspecified, and metadata service addresses are blocked. Private LAN addresses are allowed by default, but `MONITORED_TARGET_ALLOW_CIDRS` can be used to restrict monitoring to a known set of internal ranges.
 
 ### Development / Platform
 
@@ -410,7 +415,7 @@ All workers run inside the main Node process unless `DISABLE_SCHEDULER=1`.
 | Retention cleanup | fixed `24` hours | Deletes old operational records according to `RETENTION_DAYS`. |
 | Daily report | fixed `1` minute due check | Sends the daily report when local time matches `DAILY_REPORT_TIME`. |
 
-Worker executions skip overlapping runs. If one poll is still running when the next interval fires, the next run is skipped.
+Worker executions skip overlapping runs. Each worker has an in-process guard and a PostgreSQL advisory lock, so duplicate scheduler instances skip work already running elsewhere.
 
 ## Backup Job Configuration
 
@@ -629,6 +634,8 @@ npm.cmd run verify
 
 This covers TypeScript, backend behavior, health response hardening, auth-cache behavior, and frontend workflow payload normalization.
 
+Database-backed integration checks are opt-in because they create and delete rows. To run them, point `DATABASE_URL` at a disposable database and set `RUN_DB_INTEGRATION_TESTS=1` before `npm.cmd run verify`.
+
 ## Troubleshooting
 
 ### App exits with `DATABASE_URL must be set`
@@ -697,6 +704,10 @@ Temporary development fix:
 
 - Enable per-target `allowInsecureTls`, or set `ALLOW_INSECURE_TARGET_TLS=1`.
 
+### Target save or poll fails with `EGRESS_BLOCKED`
+
+The host resolved to an address class ProtectiveShell refuses to monitor, such as loopback, link-local, multicast, unspecified, or a metadata service address. Use a routable target address. If your deployment intentionally monitors a narrow internal range, set `MONITORED_TARGET_ALLOW_CIDRS` to that CIDR list and restart.
+
 ### Build fails with `spawn EPERM`
 
 This is a host policy issue blocking Vite/esbuild or tsx subprocesses. It can also prevent `npm.cmd run dev` because development mode compiles TypeScript through tsx. Use Node 20/22 on a machine or CI runner where Node child processes are allowed, or build on Linux and deploy `dist/`.
@@ -723,9 +734,10 @@ This is a host policy issue blocking Vite/esbuild or tsx subprocesses. It can al
 - `TRUST_PROXY=1` only when behind a trusted proxy
 - `COOKIE_SECURE=1` when served over HTTPS
 - Insecure SSH/TLS global bypasses disabled
+- `MONITORED_TARGET_ALLOW_CIDRS` set if monitoring should be constrained to specific internal ranges
 - Per-host SSH fingerprints configured
 - Per-target TLS fingerprints configured where possible
 - SMTP test succeeds
 - IMAP test succeeds
 - Recipients configured
-- Scheduler enabled on exactly one app instance, or intentionally disabled on web-only instances
+- Scheduler enabled only on instances intended to run workers; duplicate workers use PostgreSQL advisory locks but web-only instances should still use `DISABLE_SCHEDULER=1`

@@ -110,6 +110,11 @@ function rejectCrossOriginMutations(req: Request, res: Response, next: NextFunct
   return next();
 }
 
+function shouldSendHsts(): boolean {
+  return process.env.NODE_ENV === "production" &&
+    (process.env.COOKIE_SECURE === "1" || process.env.TRUST_PROXY === "1");
+}
+
 export function registerSecurity(app: Express) {
   app.disable("x-powered-by");
 
@@ -123,6 +128,9 @@ export function registerSecurity(app: Express) {
         "Content-Security-Policy",
         "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; base-uri 'self'; frame-ancestors 'none'",
       );
+      if (shouldSendHsts()) {
+        res.setHeader("Strict-Transport-Security", "max-age=15552000; includeSubDomains");
+      }
     }
     next();
   });
@@ -137,3 +145,7 @@ export function registerSecurity(app: Express) {
     }),
   );
 }
+
+export const securityInternals = {
+  shouldSendHsts,
+};

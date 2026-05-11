@@ -1,6 +1,7 @@
 import net from "node:net";
 import tls from "node:tls";
 import { and, desc, eq, gte, lte } from "drizzle-orm";
+import { simpleParser } from "mailparser";
 import { db } from "./db";
 import { storage } from "./storage";
 import {
@@ -88,7 +89,7 @@ async function pollConfiguredMailbox(settings: ImapSettings) {
     let maxUid = checkpoint.lastSeenUid;
     for (const uid of uids) {
       const raw = await client.fetchMessage(uid);
-      const parsed = parseEmailSource(raw);
+      const parsed = await parseEmailSource(raw);
       await persistParsedEmail(settings.folder, selected.uidvalidity, uid, parsed);
       maxUid = Math.max(maxUid, uid);
     }
@@ -392,22 +393,28 @@ async function setting(key: string): Promise<string | undefined> {
   return (await storage.getSettingValue(key)) || process.env[key];
 }
 
-export function parseEmailSource(raw: string): ParsedEmail {
+export async function parseEmailSource(raw: string): Promise<ParsedEmail> {
   const source = extractMessageSource(raw).replace(/\r\n/g, "\n");
-  const [headerRaw, ...bodyParts] = source.split(/\n\n/);
-  const headers = unfoldHeaders(headerRaw || "");
-  const body = bodyParts.join("\n\n").trim();
-  const receivedAtRaw = header(headers, "Date");
-  const receivedAt = receivedAtRaw ? new Date(receivedAtRaw) : null;
+  const parsed = await simpleParser(source);
+  const receivedAt = parsed.date ?? null;
+  const body = parsed.text || (typeof parsed.html === "string" ? stripHtml(parsed.html) : "");
 
   return {
-    messageId: header(headers, "Message-ID"),
-    fromAddr: decodeMimeWords(header(headers, "From") || ""),
-    subject: decodeMimeWords(header(headers, "Subject") || ""),
+    messageId: parsed.messageId || null,
+    fromAddr: formatAddress(parsed.from?.value?.[0]) || parsed.from?.text || null,
+    subject: parsed.subject || null,
     receivedAt: receivedAt && !Number.isNaN(receivedAt.getTime()) ? receivedAt : null,
-    snippet: body ? normalizeSnippet(decodeMimeWords(stripHtml(body))) : null,
+    snippet: body ? normalizeSnippet(stripHtml(body)) : null,
     rawExcerpt: source.slice(0, 4000),
   };
+}
+
+function formatAddress(address: { name?: string; address?: string } | undefined): string | null {
+  if (!address?.address) {
+    return null;
+  }
+  const name = address.name?.trim();
+  return name ? `${name} <${address.address}>` : address.address;
 }
 
 function extractMessageSource(raw: string): string {
@@ -422,15 +429,6 @@ function extractMessageSource(raw: string): string {
   return normalized;
 }
 
-function unfoldHeaders(raw: string): string {
-  return raw.replace(/\n[ \t]+/g, " ");
-}
-
-function header(headers: string, name: string): string | null {
-  const match = headers.match(new RegExp(`^${name}:\\s*(.+)$`, "im"));
-  return match?.[1]?.trim() || null;
-}
-
 function normalizeSnippet(value: string): string {
   return value.replace(/\s+/g, " ").trim().slice(0, 1000);
 }
@@ -440,22 +438,4 @@ function stripHtml(value: string): string {
     .replace(/<style[\s\S]*?<\/style>/gi, " ")
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
     .replace(/<[^>]+>/g, " ");
-}
-
-function decodeMimeWords(value: string): string {
-  return value.replace(/=\?([^?]+)\?([BQ])\?([^?]+)\?=/gi, (_match, charset, encoding, text) => {
-    const normalizedCharset = String(charset).toLowerCase();
-    if (normalizedCharset !== "utf-8" && normalizedCharset !== "us-ascii") {
-      return text;
-    }
-
-    if (String(encoding).toUpperCase() === "B") {
-      return Buffer.from(text, "base64").toString("utf8");
-    }
-
-    const qp = String(text)
-      .replace(/_/g, " ")
-      .replace(/=([A-Fa-f0-9]{2})/g, (_hexMatch, hex) => String.fromCharCode(parseInt(hex, 16)));
-    return Buffer.from(qp, "binary").toString("utf8");
-  });
 }

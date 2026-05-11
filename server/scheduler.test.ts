@@ -4,7 +4,21 @@ import test from "node:test";
 process.env.DATABASE_URL ||= "postgres://user:password@localhost:5432/protectiveshell_test";
 process.env.DISABLE_SCHEDULER = "1";
 
-const { nextScheduledTimes, retentionDaysFromValue, zonedWallTimeToUtc } = await import("./scheduler");
+const {
+  advisoryLockKeysForWorker,
+  nextScheduledTimes,
+  retentionDaysFromValue,
+  zonedWallTimeToUtc,
+} = await import("./scheduler");
+
+test("advisoryLockKeysForWorker returns stable integer lock keys", () => {
+  assert.deepEqual(advisoryLockKeysForWorker("imap"), advisoryLockKeysForWorker("imap"));
+  assert.notDeepEqual(advisoryLockKeysForWorker("imap"), advisoryLockKeysForWorker("notifications"));
+  for (const key of advisoryLockKeysForWorker("backup-target")) {
+    assert.equal(Number.isInteger(key), true);
+    assert.equal(key >= -2147483648 && key <= 2147483647, true);
+  }
+});
 
 test("zonedWallTimeToUtc converts Phoenix wall time to UTC", () => {
   const date = zonedWallTimeToUtc(2026, 5, 5, 2, 30, "America/Phoenix");

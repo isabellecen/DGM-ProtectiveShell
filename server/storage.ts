@@ -352,6 +352,7 @@ export class DatabaseStorage implements IStorage {
     return result.map((setting) => ({
       ...setting,
       value: isSecretSettingKey(setting.key) ? "" : setting.value,
+      hasValue: isSecretSettingKey(setting.key) ? !!setting.value : undefined,
     }));
   }
 

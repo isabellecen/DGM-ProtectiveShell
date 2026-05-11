@@ -69,6 +69,7 @@ function SettingField({
   settingKey,
   type = "text",
   clearableSecret = false,
+  secretHasValue,
   settings,
   onSave,
 }: {
@@ -77,6 +78,7 @@ function SettingField({
   settingKey: string;
   type?: string;
   clearableSecret?: boolean;
+  secretHasValue?: boolean;
   settings: Record<string, string>;
   onSave: (key: string, value: string) => void;
 }) {
@@ -88,7 +90,14 @@ function SettingField({
 
   return (
     <div className="space-y-1.5">
-      <Label htmlFor={settingKey}>{label}</Label>
+      <div className="flex items-center gap-2">
+        <Label htmlFor={settingKey}>{label}</Label>
+        {clearableSecret && (
+          <Badge variant={secretHasValue ? "secondary" : "outline"} className="text-[10px]">
+            {secretHasValue ? "Stored" : "Not set"}
+          </Badge>
+        )}
+      </div>
       <div className="flex gap-2">
         <Input
           id={settingKey}
@@ -487,8 +496,10 @@ export default function Settings() {
   });
 
   const settings: Record<string, string> = {};
+  const secretState: Record<string, boolean> = {};
   settingsData?.forEach((s) => {
     settings[s.key] = s.value || "";
+    secretState[s.key] = !!(s as AppSetting & { hasValue?: boolean }).hasValue;
   });
 
   const saveMutation = useMutation({
@@ -673,6 +684,7 @@ export default function Settings() {
                 settingKey="IMAP_PASS"
                 type="password"
                 clearableSecret
+                secretHasValue={secretState.IMAP_PASS}
                 settings={settings}
                 onSave={handleSaveSetting}
               />
@@ -731,6 +743,7 @@ export default function Settings() {
                 settingKey="SMTP_PASS"
                 type="password"
                 clearableSecret
+                secretHasValue={secretState.SMTP_PASS}
                 settings={settings}
                 onSave={handleSaveSetting}
               />

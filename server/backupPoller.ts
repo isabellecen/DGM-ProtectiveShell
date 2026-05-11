@@ -417,3 +417,8 @@ export async function pollBackupTarget(input: TargetInput): Promise<PollResult> 
     return { totalBytes: null, usedBytes: null, datastoresJson: null, pollStatus: "ERROR", pollError: msg };
   }
 }
+
+export const backupPollerInternals = {
+  fetchTargetApi,
+  normalizeFingerprint,
+};
