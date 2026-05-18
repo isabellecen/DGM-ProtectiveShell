@@ -1,7 +1,6 @@
-import { build as esbuild } from "esbuild";
 import { build as viteBuild } from "vite";
 import react from "@vitejs/plugin-react";
-import { rm, readFile } from "node:fs/promises";
+import { rm } from "node:fs/promises";
 import path from "node:path";
 
 const bundledServerDeps = [
@@ -39,25 +38,35 @@ async function buildAll() {
   });
 
   console.log("building server...");
-  const pkg = JSON.parse(await readFile("package.json", "utf-8"));
-  const allDeps = [
-    ...Object.keys(pkg.dependencies || {}),
-    ...Object.keys(pkg.devDependencies || {}),
-  ];
-  const externals = allDeps.filter((dep) => !bundledServerDeps.includes(dep));
-
-  await esbuild({
-    entryPoints: ["server/index.ts"],
-    platform: "node",
-    bundle: true,
-    format: "cjs",
-    outfile: "dist/index.cjs",
+  await viteBuild({
+    configFile: false,
     define: {
       "process.env.NODE_ENV": '"production"',
     },
-    minify: true,
-    external: externals,
-    logLevel: "info",
+    resolve: {
+      preserveSymlinks: true,
+      alias: {
+        "@": path.resolve("client", "src"),
+        "@shared": path.resolve("shared"),
+        "@assets": path.resolve("attached_assets"),
+      },
+    },
+    ssr: {
+      noExternal: bundledServerDeps,
+    },
+    build: {
+      ssr: "server/index.ts",
+      outDir: path.resolve("dist"),
+      emptyOutDir: false,
+      minify: true,
+      rollupOptions: {
+        output: {
+          format: "cjs",
+          entryFileNames: "index.cjs",
+          chunkFileNames: "server-assets/[name]-[hash].cjs",
+        },
+      },
+    },
   });
 }
 

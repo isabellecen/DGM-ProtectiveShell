@@ -112,7 +112,9 @@ app.use((req, res, next) => {
     const message =
       err instanceof ZodError
         ? err.issues.map((issue) => `${issue.path.join(".") || "body"}: ${issue.message}`).join("; ")
-        : errorLike.message || "Internal Server Error";
+        : status >= 500
+          ? "Internal Server Error"
+          : errorLike.message || "Internal Server Error";
 
     if (status >= 500) {
       console.error("Internal Server Error:", err);

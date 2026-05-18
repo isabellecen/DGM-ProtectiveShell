@@ -47,8 +47,19 @@ function configuredAllowCidrs(): ParsedCidr[] {
     .map(parseCidr);
 }
 
-function matchesCidr(address: string, cidr: ParsedCidr): boolean {
+function comparableAddress(address: string): ipaddr.IPv4 | ipaddr.IPv6 {
   const parsed = ipaddr.parse(address);
+  if (parsed.kind() === "ipv6") {
+    const ipv6 = parsed as ipaddr.IPv6;
+    if (ipv6.isIPv4MappedAddress()) {
+      return ipv6.toIPv4Address();
+    }
+  }
+  return parsed;
+}
+
+function matchesCidr(address: string, cidr: ParsedCidr): boolean {
+  const parsed = comparableAddress(address);
   if (parsed.kind() !== cidr.addr.kind()) {
     return false;
   }
@@ -82,7 +93,7 @@ export async function resolveTargetAddresses(host: string): Promise<string[]> {
   return results.map((result) => result.address);
 }
 
-export async function assertMonitoredTargetAllowed(host: string): Promise<void> {
+export async function assertMonitoredTargetAllowed(host: string): Promise<string[]> {
   const normalized = cleanHost(host);
   if (blockedHostnames.has(normalized)) {
     throw new Error(`Target host ${host} is blocked`);
@@ -101,10 +112,13 @@ export async function assertMonitoredTargetAllowed(host: string): Promise<void> 
       throw new Error(`Target host ${host} resolves outside MONITORED_TARGET_ALLOW_CIDRS`);
     }
   }
+
+  return addresses;
 }
 
 export const egressInternals = {
   cleanHost,
   parseCidr,
   matchesCidr,
+  comparableAddress,
 };

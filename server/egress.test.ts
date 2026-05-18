@@ -8,10 +8,12 @@ const { assertMonitoredTargetAllowed, isAllowedByConfiguredCidrs, isBlockedTarge
 
 test("egress guard blocks loopback and link-local targets", async () => {
   assert.equal(isBlockedTargetAddress("127.0.0.1"), true);
+  assert.equal(isBlockedTargetAddress("::ffff:127.0.0.1"), true);
   assert.equal(isBlockedTargetAddress("169.254.169.254"), true);
   assert.equal(isBlockedTargetAddress("192.168.1.10"), false);
 
   await assert.rejects(assertMonitoredTargetAllowed("127.0.0.1"), /blocked address/);
+  await assert.rejects(assertMonitoredTargetAllowed("::ffff:127.0.0.1"), /blocked address/);
   await assert.rejects(assertMonitoredTargetAllowed("metadata.google.internal"), /blocked/);
 });
 
@@ -20,6 +22,7 @@ test("egress allowlist restricts monitored target CIDRs when configured", () => 
   process.env.MONITORED_TARGET_ALLOW_CIDRS = "192.168.1.0/24,10.0.0.0/8";
   try {
     assert.equal(isAllowedByConfiguredCidrs("192.168.1.20"), true);
+    assert.equal(isAllowedByConfiguredCidrs("::ffff:192.168.1.20"), true);
     assert.equal(isAllowedByConfiguredCidrs("192.168.2.20"), false);
     assert.equal(isAllowedByConfiguredCidrs("10.5.0.1"), true);
   } finally {

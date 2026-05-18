@@ -4,6 +4,8 @@ import http from "http";
 import type { TLSSocket } from "tls";
 import type { BackupDatastore } from "@shared/monitoringPayloads";
 
+const maxTargetApiResponseBytes = 1024 * 1024;
+
 export type PollResult = {
   totalBytes: string | null;
   usedBytes: string | null;
@@ -15,6 +17,7 @@ export type PollResult = {
 type TargetInput = {
   type: "SYNOLOGY" | "PBS";
   host: string;
+  connectHost?: string;
   port: number;
   username: string;
   password: string;
@@ -296,7 +299,7 @@ function normalizeFingerprint(value: string): string {
 function fetchTargetApi(
   url: string,
   options?: { method?: string; headers?: Record<string, string>; body?: string },
-  tlsOptions?: Pick<TargetInput, "tlsFingerprint" | "allowInsecureTls">,
+  tlsOptions?: Pick<TargetInput, "tlsFingerprint" | "allowInsecureTls" | "connectHost">,
 ): Promise<any> {
   return new Promise((resolve, reject) => {
     const parsed = new URL(url);
@@ -309,13 +312,20 @@ function fetchTargetApi(
     const rejectUnauthorized = isHttps && !expectedFingerprint && !allowInsecureTls;
 
     const reqOptions: https.RequestOptions = {
-      hostname: parsed.hostname,
+      hostname: tlsOptions?.connectHost || parsed.hostname,
       port: parsed.port || (isHttps ? 443 : 80),
       path: parsed.pathname + parsed.search,
       method: options?.method || "GET",
-      headers: options?.headers || {},
+      headers: {
+        Host: parsed.host,
+        ...(options?.headers || {}),
+      },
       rejectUnauthorized,
     };
+
+    if (isHttps && tlsOptions?.connectHost) {
+      reqOptions.servername = parsed.hostname;
+    }
 
     if (isHttps) {
       reqOptions.agent = new https.Agent({ rejectUnauthorized });
@@ -354,7 +364,16 @@ function fetchTargetApi(
 
     const req = lib.request(reqOptions, (res) => {
       let body = "";
-      res.on("data", (chunk) => (body += chunk));
+      let bodyBytes = 0;
+      res.on("data", (chunk) => {
+        bodyBytes += Buffer.byteLength(chunk);
+        if (bodyBytes > maxTargetApiResponseBytes) {
+          req.destroy();
+          settleReject(new Error("TARGET_RESPONSE_TOO_LARGE"));
+          return;
+        }
+        body += chunk;
+      });
       res.on("end", () => {
         try {
           settleResolve(JSON.parse(body));
@@ -414,6 +433,7 @@ export async function pollBackupTarget(input: TargetInput): Promise<PollResult> 
     if (msg.includes("ETIMEDOUT") || msg.includes("abort")) return { totalBytes: null, usedBytes: null, datastoresJson: null, pollStatus: "ERROR", pollError: "Connection timed out" };
     if (msg.includes("TLS_FINGERPRINT_MISMATCH")) return { totalBytes: null, usedBytes: null, datastoresJson: null, pollStatus: "ERROR", pollError: "TLS certificate fingerprint mismatch" };
     if (msg.includes("SELF_SIGNED") || msg.includes("UNABLE_TO_VERIFY")) return { totalBytes: null, usedBytes: null, datastoresJson: null, pollStatus: "ERROR", pollError: "TLS certificate error - self-signed cert" };
+    if (msg.includes("TARGET_RESPONSE_TOO_LARGE")) return { totalBytes: null, usedBytes: null, datastoresJson: null, pollStatus: "ERROR", pollError: "Target response was too large" };
     return { totalBytes: null, usedBytes: null, datastoresJson: null, pollStatus: "ERROR", pollError: msg };
   }
 }
@@ -421,4 +441,5 @@ export async function pollBackupTarget(input: TargetInput): Promise<PollResult> 
 export const backupPollerInternals = {
   fetchTargetApi,
   normalizeFingerprint,
+  maxTargetApiResponseBytes,
 };

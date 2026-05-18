@@ -44,6 +44,7 @@ export type ProxmoxCheckResult = {
 
 type CollectInput = {
   host: string;
+  connectHost?: string;
   port: number;
   username: string;
   password: string;
@@ -114,7 +115,7 @@ function runSSH(
         reject(e);
       })
       .connect({
-        host: input.host,
+        host: input.connectHost || input.host,
         port: input.port,
         username: input.username,
         password: input.password,

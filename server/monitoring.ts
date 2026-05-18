@@ -14,8 +14,10 @@ export async function runProxmoxHostCheck(hostId: number) {
 
   const timeoutSeconds = await numericSetting("SSH_TIMEOUT", 20);
   let result: Awaited<ReturnType<typeof collectProxmoxHealth>> | undefined;
+  let connectHost: string | undefined;
   try {
-    await assertMonitoredTargetAllowed(host.host);
+    const allowedAddresses = await assertMonitoredTargetAllowed(host.host);
+    connectHost = allowedAddresses[0];
   } catch (err) {
     result = {
       overall_status: "UNKNOWN",
@@ -29,6 +31,7 @@ export async function runProxmoxHostCheck(hostId: number) {
   }
   result ??= await collectProxmoxHealth({
     host: host.host,
+    connectHost,
     port: host.port,
     username: host.username,
     password: host.password,
@@ -95,8 +98,10 @@ export async function pollBackupTargetAndPersist(targetId: number) {
   }
 
   let result: Awaited<ReturnType<typeof pollBackupTarget>> | undefined;
+  let connectHost: string | undefined;
   try {
-    await assertMonitoredTargetAllowed(target.host);
+    const allowedAddresses = await assertMonitoredTargetAllowed(target.host);
+    connectHost = allowedAddresses[0];
   } catch (err) {
     const message = err instanceof Error ? err.message : "Target host is blocked";
     result = {
@@ -110,6 +115,7 @@ export async function pollBackupTargetAndPersist(targetId: number) {
   result ??= await pollBackupTarget({
     type: target.type as "SYNOLOGY" | "PBS",
     host: target.host,
+    connectHost,
     port: target.port,
     username: target.username,
     password: target.password,
