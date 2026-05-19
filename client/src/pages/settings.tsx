@@ -375,6 +375,7 @@ function RecipientDialog({
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/recipients"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/notification-routes"] });
       toast({ title: isEditing ? "Recipient updated" : "Recipient added" });
       onOpenChange(false);
     },
@@ -537,6 +538,7 @@ export default function Settings() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/recipients"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/notification-routes"] });
       toast({ title: "Recipient removed" });
     },
     onError: (err: Error) => {

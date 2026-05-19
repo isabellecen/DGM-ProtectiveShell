@@ -36,7 +36,7 @@ import { useState } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Email, Job, Customer } from "@shared/schema";
-import { buildEmailLinkPayload, buildJobPayload, buildJobRulePayload } from "@/lib/workflow-payloads";
+import { buildEmailJobPayload, buildEmailLinkPayload, buildJobPayload } from "@/lib/workflow-payloads";
 
 interface EmailWithJob extends Email {
   jobName?: string;
@@ -191,19 +191,13 @@ function CreateJobFromEmailDialog({
         longRunning: false,
         daysOfWeek,
       });
-      const jobRes = await apiRequest("POST", "/api/jobs", jobPayload);
-      const newJob = await jobRes.json();
-
-      await apiRequest("POST", `/api/emails/${email.id}/link-job`, buildEmailLinkPayload(newJob.id));
-
-      if (createRule && email.fromAddr) {
-        await apiRequest("POST", "/api/job-rules", buildJobRulePayload({
-          jobId: newJob.id,
-          senderMatch: email.fromAddr,
-        }));
-      }
-
-      return newJob;
+      const jobRes = await apiRequest(
+        "POST",
+        `/api/emails/${email.id}/create-job`,
+        buildEmailJobPayload(jobPayload, createRule),
+      );
+      const result = await jobRes.json();
+      return result.job;
     },
     onSuccess: (newJob) => {
       queryClient.invalidateQueries({ queryKey: ["/api/jobs"] });

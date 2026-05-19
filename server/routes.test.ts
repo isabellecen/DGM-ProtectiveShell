@@ -21,12 +21,14 @@ test("setting validation rejects unknown keys and invalid values", () => {
   assert.equal(routeInternals.settingSchema.safeParse({ key: "IMAP_PORT", value: "70000" }).success, false);
   assert.equal(routeInternals.settingSchema.safeParse({ key: "IMAP_TLS", value: "yes" }).success, false);
   assert.equal(routeInternals.settingSchema.safeParse({ key: "APP_TIMEZONE", value: "Mars/Base" }).success, false);
+  assert.equal(routeInternals.settingSchema.safeParse({ key: "SMTP_FROM", value: "ops\r\nBcc: bad@example.com" }).success, false);
 });
 
 test("setting validation accepts supported blank and formatted values", () => {
   assert.equal(routeInternals.settingSchema.safeParse({ key: "IMAP_PORT", value: "" }).success, true);
   assert.equal(routeInternals.settingSchema.safeParse({ key: "APP_TIMEZONE", value: "America/Phoenix" }).success, true);
   assert.equal(routeInternals.settingSchema.safeParse({ key: "DAILY_REPORT_TIME", value: "08:30" }).success, true);
+  assert.equal(routeInternals.settingSchema.safeParse({ key: "SMTP_FROM", value: "ops@example.com" }).success, true);
 });
 
 test("notification route validation requires ids for scoped routes", () => {
@@ -62,6 +64,35 @@ test("job patch validation rejects weekly jobs without selected days", () => {
     { scheduleType: "daily", daysOfWeek: [] },
     { scheduleType: "weekly", daysOfWeek: ["monday"] },
   ));
+});
+
+test("email job creation validation uses full job create rules", () => {
+  assert.equal(
+    routeInternals.emailCreateJobSchema.safeParse({
+      job: {
+        name: "Weekly",
+        systemType: "PBS",
+        scheduleType: "weekly",
+        scheduleTime: "02:00",
+        daysOfWeek: [],
+      },
+      createRule: true,
+    }).success,
+    false,
+  );
+
+  assert.equal(
+    routeInternals.emailCreateJobSchema.safeParse({
+      job: {
+        name: "Daily",
+        systemType: "VEEAM",
+        scheduleType: "daily",
+        scheduleTime: "02:00",
+      },
+      createRule: true,
+    }).success,
+    true,
+  );
 });
 
 test("backup target default ports match supported server types", () => {

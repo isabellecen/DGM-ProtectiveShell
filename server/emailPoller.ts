@@ -1,5 +1,6 @@
 import net from "node:net";
 import tls from "node:tls";
+import crypto from "node:crypto";
 import { and, desc, eq, gte, lte } from "drizzle-orm";
 import { simpleParser } from "mailparser";
 import { db } from "./db";
@@ -79,7 +80,8 @@ async function pollConfiguredMailbox(settings: ImapSettings) {
   try {
     await client.login();
     const selected = await client.select(settings.folder);
-    const checkpoint = await getCheckpoint(settings.folder, selected.uidvalidity);
+    const mailboxKey = mailboxStorageKey(settings);
+    const checkpoint = await getCheckpoint(mailboxKey, selected.uidvalidity);
     const uids = selectUidsForPoll(
       await client.searchNewUids(checkpoint.lastSeenUid),
       checkpoint.lastSeenUid,
@@ -90,11 +92,11 @@ async function pollConfiguredMailbox(settings: ImapSettings) {
     for (const uid of uids) {
       const raw = await client.fetchMessage(uid);
       const parsed = await parseEmailSource(raw);
-      await persistParsedEmail(settings.folder, selected.uidvalidity, uid, parsed);
+      await persistParsedEmail(mailboxKey, selected.uidvalidity, uid, parsed);
       maxUid = Math.max(maxUid, uid);
     }
 
-    await upsertCheckpoint(settings.folder, selected.uidvalidity, maxUid);
+    await upsertCheckpoint(mailboxKey, selected.uidvalidity, maxUid);
   } finally {
     await client.logout().catch(() => undefined);
   }
@@ -287,6 +289,18 @@ async function upsertCheckpoint(folder: string, uidvalidity: number, lastSeenUid
     });
 }
 
+function mailboxStorageKey(settings: Pick<ImapSettings, "host" | "port" | "username" | "folder" | "useTls">): string {
+  const identity = [
+    settings.host.trim().toLowerCase(),
+    settings.port,
+    settings.useTls ? "tls" : "plain",
+    settings.username.trim(),
+    settings.folder.trim(),
+  ].join("\0");
+  const digest = crypto.createHash("sha256").update(identity).digest("hex").slice(0, 16);
+  return `${settings.folder}#${digest}`;
+}
+
 class SimpleImapClient {
   private socket?: ImapSocket;
   private tagCounter = 0;
@@ -443,6 +457,10 @@ export async function parseEmailSource(raw: string): Promise<ParsedEmail> {
     rawExcerpt: source.slice(0, 4000),
   };
 }
+
+export const emailPollerInternals = {
+  mailboxStorageKey,
+};
 
 function formatAddress(address: { name?: string; address?: string } | undefined): string | null {
   if (!address?.address) {

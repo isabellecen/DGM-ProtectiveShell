@@ -1,6 +1,6 @@
 import net from "node:net";
 import tls from "node:tls";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import { db } from "./db";
 import { storage } from "./storage";
 import {
@@ -43,19 +43,23 @@ export async function notifyOpenIncidents() {
       .select()
       .from(incidents)
       .where(and(eq(incidents.state, "OPEN"), isNull(incidents.notificationSentAt)))
-      .limit(25);
+      .orderBy(desc(incidents.createdAt));
 
     for (const incident of pending) {
-      const resolvedRecipients = await resolveRecipients(incident);
-      if (resolvedRecipients.length === 0) {
-        continue;
-      }
+      try {
+        const resolvedRecipients = await resolveRecipients(incident);
+        if (resolvedRecipients.length === 0) {
+          continue;
+        }
 
-      await sendIncidentEmail(smtp, incident, resolvedRecipients);
-      await db
-        .update(incidents)
-        .set({ notificationSentAt: new Date(), updatedAt: new Date() })
-        .where(eq(incidents.id, incident.id));
+        await sendIncidentEmail(smtp, incident, resolvedRecipients);
+        await db
+          .update(incidents)
+          .set({ notificationSentAt: new Date(), updatedAt: new Date() })
+          .where(eq(incidents.id, incident.id));
+      } catch (err) {
+        console.warn(`Incident notification failed for #${incident.id}:`, err);
+      }
     }
   } finally {
     notifyRunning = false;
@@ -450,12 +454,27 @@ class SimpleSmtpClient {
   }
 }
 
+function normalizeSmtpAddress(value: string): string | null {
+  const trimmed = value.trim();
+  return /^[^\s@<>\r\n]+@[^\s@<>\r\n]+$/.test(trimmed) ? trimmed : null;
+}
+
+function headerValue(value: string): string {
+  return value.replace(/[\r\n]+/g, " ").trim();
+}
+
+function dotStuffBody(body: string): string {
+  return body
+    .replace(/\r?\n/g, "\r\n")
+    .replace(/(^|\r\n)\./g, "$1..");
+}
+
 function formatMessage(from: string, to: string[], subject: string, body: string): string {
-  const normalizedBody = body.replace(/\r?\n\./g, "\n..");
+  const normalizedBody = dotStuffBody(body);
   return [
-    `From: ${from}`,
-    `To: ${to.join(", ")}`,
-    `Subject: ${subject.replace(/\r?\n/g, " ")}`,
+    `From: ${headerValue(from)}`,
+    `To: ${to.map(headerValue).join(", ")}`,
+    `Subject: ${headerValue(subject)}`,
     "MIME-Version: 1.0",
     "Content-Type: text/plain; charset=utf-8",
     "",
@@ -467,9 +486,13 @@ function formatMessage(from: string, to: string[], subject: string, body: string
 
 async function getSmtpSettings(): Promise<SmtpSettings | null> {
   const host = await setting("SMTP_HOST");
-  const from = await setting("SMTP_FROM");
-  if (!host || !from) {
+  const rawFrom = await setting("SMTP_FROM");
+  if (!host || !rawFrom) {
     return null;
+  }
+  const from = normalizeSmtpAddress(rawFrom);
+  if (!from) {
+    throw new Error("SMTP_FROM must be a valid email address");
   }
 
   return {
@@ -488,4 +511,7 @@ async function setting(key: string): Promise<string | undefined> {
 
 export const notificationServiceInternals = {
   recipientsForMatchingRoutes,
+  dotStuffBody,
+  formatMessage,
+  normalizeSmtpAddress,
 };

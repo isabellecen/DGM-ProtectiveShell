@@ -31,3 +31,18 @@ test("matching notification routes with no valid recipients do not request fallb
   );
   assert.equal(notificationServiceInternals.recipientsForMatchingRoutes([], allRecipients as any), null);
 });
+
+test("SMTP address and message formatting rejects injection edge cases", () => {
+  assert.equal(notificationServiceInternals.normalizeSmtpAddress("ops@example.com"), "ops@example.com");
+  assert.equal(notificationServiceInternals.normalizeSmtpAddress("ops@example.com\r\nBCC: bad@example.com"), null);
+
+  const message = notificationServiceInternals.formatMessage(
+    "ops@example.com",
+    ["tech@example.com"],
+    "Hello\r\nBCC: bad@example.com",
+    ".first line\n.second line",
+  );
+
+  assert.match(message, /Subject: Hello BCC: bad@example\.com/);
+  assert.match(message, /\r\n\.\.first line\r\n\.\.second line\r\n\.\r\n$/);
+});

@@ -3,7 +3,12 @@ import test from "node:test";
 
 process.env.DATABASE_URL ||= "postgres://user:password@localhost:5432/protectiveshell_test";
 
-const { detectEventStatus, parseEmailSource, selectUidsForPoll } = await import("./emailPoller");
+const {
+  detectEventStatus,
+  emailPollerInternals,
+  parseEmailSource,
+  selectUidsForPoll,
+} = await import("./emailPoller");
 
 test("detectEventStatus classifies common backup messages", () => {
   assert.equal(detectEventStatus("Backup completed successfully"), "OK");
@@ -16,6 +21,23 @@ test("detectEventStatus classifies common backup messages", () => {
 
 test("selectUidsForPoll fetches the oldest unprocessed batch first", () => {
   assert.deepEqual(selectUidsForPoll([7, 3, 6, 4, 5], 2, 2), [3, 4]);
+});
+
+test("mailbox storage keys separate accounts that share folder and UID values", () => {
+  const base = {
+    host: "mail.example.com",
+    port: 993,
+    username: "backup-a",
+    folder: "INBOX",
+    useTls: true,
+  };
+
+  const first = emailPollerInternals.mailboxStorageKey(base);
+  const second = emailPollerInternals.mailboxStorageKey({ ...base, username: "backup-b" });
+
+  assert.notEqual(first, second);
+  assert.match(first, /^INBOX#[a-f0-9]{16}$/);
+  assert.equal(first.includes("backup-a"), false);
 });
 
 test("parseEmailSource extracts headers and snippet from IMAP fetch output", async () => {

@@ -198,7 +198,20 @@ const settingSchema = z.object({
       message: "DAILY_REPORT_TIME must use HH:MM format",
     });
   }
+
+  if (data.key === "SMTP_FROM" && !z.string().email().safeParse(value).success) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["value"],
+      message: "SMTP_FROM must be a valid email address",
+    });
+  }
 });
+
+const emailCreateJobSchema = z.object({
+  job: jobCreateSchema,
+  createRule: z.boolean().default(false),
+}).strict();
 
 const notificationRouteCreateSchema = z.object({
   scopeType: z.enum(["GLOBAL", "CUSTOMER", "JOB"]).default("GLOBAL"),
@@ -607,6 +620,23 @@ export async function registerRoutes(
     res.json(result);
   });
 
+  app.post("/api/emails/:id/create-job", async (req, res) => {
+    const emailId = parseId(req.params.id);
+    const { job, createRule } = emailCreateJobSchema.parse(req.body);
+    const result = await storage.createJobFromEmail(
+      emailId,
+      {
+        ...job,
+        customerId: job.customerId ?? null,
+      },
+      { createRule },
+    );
+    if (!result) {
+      return res.status(404).json({ message: "Email not found" });
+    }
+    res.status(201).json(result);
+  });
+
   // Events (read-only for UI)
   app.get("/api/events", async (_req, res) => {
     const result = await storage.getEvents(50);
@@ -693,6 +723,7 @@ export async function registerRoutes(
 
 export const routeInternals = {
   jobRuleCreateSchema,
+  emailCreateJobSchema,
   notificationRouteCreateSchema,
   settingSchema,
   assertRecipientsExist,

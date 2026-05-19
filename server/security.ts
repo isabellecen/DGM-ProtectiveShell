@@ -115,6 +115,19 @@ function shouldSendHsts(): boolean {
     (process.env.COOKIE_SECURE === "1" || process.env.TRUST_PROXY === "1");
 }
 
+function productionContentSecurityPolicy(): string {
+  return [
+    "default-src 'self'",
+    "connect-src 'self'",
+    "img-src 'self' data:",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "font-src 'self' https://fonts.gstatic.com",
+    "script-src 'self'",
+    "base-uri 'self'",
+    "frame-ancestors 'none'",
+  ].join("; ");
+}
+
 export function registerSecurity(app: Express) {
   app.disable("x-powered-by");
 
@@ -124,10 +137,7 @@ export function registerSecurity(app: Express) {
     res.setHeader("X-Frame-Options", "DENY");
     res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
     if (process.env.NODE_ENV === "production") {
-      res.setHeader(
-        "Content-Security-Policy",
-        "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; base-uri 'self'; frame-ancestors 'none'",
-      );
+      res.setHeader("Content-Security-Policy", productionContentSecurityPolicy());
       if (shouldSendHsts()) {
         res.setHeader("Strict-Transport-Security", "max-age=15552000; includeSubDomains");
       }
@@ -148,4 +158,5 @@ export function registerSecurity(app: Express) {
 
 export const securityInternals = {
   shouldSendHsts,
+  productionContentSecurityPolicy,
 };

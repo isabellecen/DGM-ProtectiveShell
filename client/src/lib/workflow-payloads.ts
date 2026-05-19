@@ -115,6 +115,10 @@ export function buildEmailLinkPayload(selectedJobId: OptionalSelectId) {
   return { jobId: selectedId(selectedJobId) };
 }
 
+export function buildEmailJobPayload(job: ReturnType<typeof buildJobPayload>, createRule: boolean) {
+  return { job, createRule };
+}
+
 export function buildJobRulePayload(input: {
   jobId: number;
   senderMatch?: string | null;

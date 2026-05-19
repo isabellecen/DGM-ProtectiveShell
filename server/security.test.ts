@@ -31,3 +31,10 @@ test("HSTS is sent only for production HTTPS deployments", () => {
     else process.env.TRUST_PROXY = previousTrustProxy;
   }
 });
+
+test("production CSP allows bundled font providers", () => {
+  const csp = securityInternals.productionContentSecurityPolicy();
+
+  assert.match(csp, /style-src 'self' 'unsafe-inline' https:\/\/fonts\.googleapis\.com/);
+  assert.match(csp, /font-src 'self' https:\/\/fonts\.gstatic\.com/);
+});

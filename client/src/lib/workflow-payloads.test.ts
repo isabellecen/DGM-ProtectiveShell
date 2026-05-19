@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildBackupTargetPayload,
+  buildEmailJobPayload,
   buildEmailLinkPayload,
   buildJobPayload,
   buildJobRulePayload,
@@ -122,6 +123,21 @@ test("target and host edit workflows preserve existing secrets when blank", () =
 
 test("email and settings workflows build normalized API payloads", () => {
   assert.deepEqual(buildEmailLinkPayload("42"), { jobId: 42 });
+  const job = buildJobPayload({
+    name: "Nightly",
+    systemType: "VEEAM",
+    customerId: "none",
+    scheduleType: "daily",
+    scheduleTime: "02:00",
+    windowHours: "6",
+    enabled: true,
+    longRunning: false,
+    daysOfWeek: [],
+  });
+  assert.deepEqual(buildEmailJobPayload(job, true), {
+    job,
+    createRule: true,
+  });
   assert.deepEqual(buildJobRulePayload({ jobId: 42, senderMatch: "backup@example.com" }), {
     jobId: 42,
     senderMatch: "backup@example.com",

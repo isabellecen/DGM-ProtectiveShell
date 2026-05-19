@@ -8,6 +8,7 @@ const {
   advisoryLockKeysForWorker,
   nextScheduledTimes,
   retentionDaysFromValue,
+  scheduledTimesForProducer,
   zonedWallTimeToUtc,
 } = await import("./scheduler");
 
@@ -51,6 +52,39 @@ test("nextScheduledTimes respects weekly day selection", () => {
 
   const times = nextScheduledTimes(job, new Date("2026-05-09T18:00:00.000Z"), "America/Phoenix");
   assert.deepEqual(times.map((time) => time.toISOString()), ["2026-05-10T05:00:00.000Z"]);
+});
+
+test("scheduledTimesForProducer includes recent overdue runs for catch-up", () => {
+  const job = {
+    scheduleTime: "02:00",
+    scheduleType: "daily",
+    daysOfWeek: [],
+    longRunning: false,
+    longWindowHours: 24,
+    windowHours: 6,
+  };
+
+  const times = scheduledTimesForProducer(job, new Date("2026-05-05T20:00:00.000Z"), "America/Phoenix")
+    .map((time) => time.toISOString());
+
+  assert(times.includes("2026-05-05T09:00:00.000Z"));
+  assert(times.includes("2026-05-06T09:00:00.000Z"));
+});
+
+test("scheduledTimesForProducer catches weekly runs after downtime", () => {
+  const job = {
+    scheduleTime: "22:00",
+    scheduleType: "weekly",
+    daysOfWeek: ["saturday"],
+    longRunning: false,
+    longWindowHours: 24,
+    windowHours: 6,
+  };
+
+  const times = scheduledTimesForProducer(job, new Date("2026-05-11T16:00:00.000Z"), "America/Phoenix")
+    .map((time) => time.toISOString());
+
+  assert(times.includes("2026-05-10T05:00:00.000Z"));
 });
 
 test("retentionDaysFromValue accepts positive integers and falls back safely", () => {

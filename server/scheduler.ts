@@ -218,7 +218,7 @@ async function produceExpectedRuns() {
   const timezone = await getAppTimezone();
 
   for (const job of activeJobs) {
-    for (const scheduledFor of nextScheduledTimes(job, now, timezone)) {
+    for (const scheduledFor of scheduledTimesForProducer(job, now, timezone)) {
       const windowHours = job.longRunning ? job.longWindowHours || job.windowHours : job.windowHours;
       await db
         .insert(expectedRuns)
@@ -235,10 +235,35 @@ async function produceExpectedRuns() {
   }
 }
 
+export function scheduledTimesForProducer(
+  job: Pick<typeof jobs.$inferSelect, "scheduleTime" | "scheduleType" | "daysOfWeek" | "longRunning" | "longWindowHours" | "windowHours">,
+  now: Date,
+  timezone = "UTC",
+): Date[] {
+  const windowHours = job.longRunning ? job.longWindowHours || job.windowHours : job.windowHours;
+  const catchupDays = Math.max(8, Math.ceil(windowHours / 24) + 1);
+  return scheduledTimesForOffsets(job, now, timezone, -catchupDays, 1, () => true);
+}
+
 export function nextScheduledTimes(
   job: Pick<typeof jobs.$inferSelect, "scheduleTime" | "scheduleType" | "daysOfWeek" | "longRunning" | "longWindowHours" | "windowHours">,
   now: Date,
   timezone = "UTC",
+): Date[] {
+  return scheduledTimesForOffsets(job, now, timezone, 0, 1, (scheduled) => {
+    const windowHours = job.longRunning ? job.longWindowHours || job.windowHours : job.windowHours;
+    const deadlineAt = new Date(scheduled.getTime() + windowHours * 60 * 60 * 1000);
+    return deadlineAt > now;
+  });
+}
+
+function scheduledTimesForOffsets(
+  job: Pick<typeof jobs.$inferSelect, "scheduleTime" | "scheduleType" | "daysOfWeek" | "longRunning" | "longWindowHours" | "windowHours">,
+  now: Date,
+  timezone: string,
+  firstOffset: number,
+  lastOffset: number,
+  include: (scheduled: Date) => boolean,
 ): Date[] {
   const times: Date[] = [];
   const [hoursRaw, minutesRaw] = job.scheduleTime.split(":");
@@ -255,8 +280,9 @@ export function nextScheduledTimes(
     return times;
   }
 
-  for (let offset = 0; offset <= 1; offset++) {
-    const localDate = addLocalDays(toZonedParts(now, timezone), offset);
+  const nowParts = toZonedParts(now, timezone);
+  for (let offset = firstOffset; offset <= lastOffset; offset++) {
+    const localDate = addLocalDays(nowParts, offset);
     const scheduled = zonedWallTimeToUtc(
       localDate.year,
       localDate.month,
@@ -273,9 +299,7 @@ export function nextScheduledTimes(
       }
     }
 
-    const windowHours = job.longRunning ? job.longWindowHours || job.windowHours : job.windowHours;
-    const deadlineAt = new Date(scheduled.getTime() + windowHours * 60 * 60 * 1000);
-    if (deadlineAt > now) {
+    if (include(scheduled)) {
       times.push(scheduled);
     }
   }

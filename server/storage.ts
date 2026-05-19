@@ -36,6 +36,11 @@ export interface IStorage {
   getJobs(): Promise<(Job & WithCustomerName)[]>;
   getJob(id: number): Promise<Job | undefined>;
   createJob(data: InsertJob): Promise<Job>;
+  createJobFromEmail(
+    emailId: number,
+    data: InsertJob,
+    options?: { createRule?: boolean },
+  ): Promise<CreateJobFromEmailResult | undefined>;
   updateJob(id: number, data: Partial<InsertJob>): Promise<Job | undefined>;
   deleteJob(id: number): Promise<void>;
 
@@ -115,6 +120,12 @@ export type RetentionSummary = {
   deletedIncidents: number;
 };
 
+export type CreateJobFromEmailResult = {
+  job: Job;
+  email: Email;
+  rule?: JobRule;
+};
+
 type ProxmoxHostUpdate = Partial<InsertProxmoxHost> & {
   lastCheckAt?: Date;
   lastStatus?: string | null;
@@ -130,6 +141,176 @@ type BackupTargetUpdate = Partial<InsertBackupTarget> & {
   pollError?: string | null;
   datastoresJson?: unknown;
 };
+
+const prunedRecipient = Symbol("prunedRecipient");
+
+function pruneRecipientFromRoutePayload(value: unknown, recipientId: number): unknown | typeof prunedRecipient {
+  if (typeof value === "number") {
+    return value === recipientId ? prunedRecipient : value;
+  }
+
+  if (typeof value === "string") {
+    return /^\d+$/.test(value) && Number(value) === recipientId ? prunedRecipient : value;
+  }
+
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => pruneRecipientFromRoutePayload(entry, recipientId))
+      .filter((entry) => entry !== prunedRecipient);
+  }
+
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .map(([key, entry]) => [key, pruneRecipientFromRoutePayload(entry, recipientId)] as const)
+      .filter(([, entry]) => entry !== prunedRecipient);
+    return entries.length > 0 ? Object.fromEntries(entries) : prunedRecipient;
+  }
+
+  return value;
+}
+
+function routePayloadHasRecipients(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.some((entry) => routePayloadHasRecipients(entry));
+  }
+  if (value && typeof value === "object") {
+    return Object.values(value as Record<string, unknown>).some((entry) => routePayloadHasRecipients(entry));
+  }
+  return value != null && value !== "";
+}
+
+function shouldPruneRecipientRoutesForUpdate(data: Partial<InsertRecipient>): boolean {
+  return data.enabled === false;
+}
+
+async function pruneRecipientFromNotificationRoutes(client: typeof db, recipientId: number): Promise<void> {
+  const routes = await client.select().from(notificationRoutes);
+  for (const route of routes) {
+    const nextPayload = pruneRecipientFromRoutePayload(route.recipientsJson, recipientId);
+    if (nextPayload === prunedRecipient || !routePayloadHasRecipients(nextPayload)) {
+      await client.delete(notificationRoutes).where(eq(notificationRoutes.id, route.id));
+    } else if (JSON.stringify(nextPayload) !== JSON.stringify(route.recipientsJson)) {
+      await client
+        .update(notificationRoutes)
+        .set({ recipientsJson: nextPayload })
+        .where(eq(notificationRoutes.id, route.id));
+    }
+  }
+}
+
+async function linkEmailToJobInTransaction(
+  client: typeof db,
+  emailId: number,
+  jobId: number,
+  preloadedEmail?: Email,
+): Promise<Email | undefined> {
+  const email = preloadedEmail ?? (await client.select().from(emails).where(eq(emails.id, emailId)))[0];
+  if (!email) {
+    return undefined;
+  }
+
+  const receivedAt = email.receivedAt || new Date();
+  const status = detectEventStatus(`${email.subject || ""}\n${email.snippet || ""}`);
+  const [run] = await client
+    .select()
+    .from(expectedRuns)
+    .where(
+      and(
+        eq(expectedRuns.jobId, jobId),
+        eq(expectedRuns.status, "PENDING"),
+        lte(expectedRuns.scheduledFor, receivedAt),
+        gte(expectedRuns.deadlineAt, receivedAt),
+      ),
+    )
+    .orderBy(desc(expectedRuns.scheduledFor))
+    .limit(1);
+  const [job] = await client.select().from(jobs).where(eq(jobs.id, jobId));
+  if (!job) {
+    return undefined;
+  }
+
+  const nextExpectedRunId = run?.id ?? null;
+  const [existingEvent] = await client.select().from(events).where(eq(events.emailId, emailId)).limit(1);
+  if (existingEvent) {
+    const previousExpectedRunId = existingEvent.expectedRunId;
+    const previousFingerprint = backupEmailIncidentFingerprint({
+      emailId,
+      expectedRunId: previousExpectedRunId,
+    });
+    const nextFingerprint = backupEmailIncidentFingerprint({
+      emailId,
+      expectedRunId: nextExpectedRunId,
+    });
+
+    if (previousExpectedRunId && previousExpectedRunId !== nextExpectedRunId) {
+      await client
+        .update(expectedRuns)
+        .set({ status: "PENDING", linkedEventId: null })
+        .where(
+          and(
+            eq(expectedRuns.id, previousExpectedRunId),
+            eq(expectedRuns.linkedEventId, existingEvent.id),
+          ),
+        );
+    }
+
+    if (previousFingerprint !== nextFingerprint) {
+      await client
+        .update(incidents)
+        .set({ state: "RESOLVED", updatedAt: new Date() })
+        .where(eq(incidents.sourceFingerprint, previousFingerprint));
+    }
+  }
+
+  const [event] = existingEvent
+    ? await client
+        .update(events)
+        .set({
+          jobId,
+          expectedRunId: nextExpectedRunId,
+          status,
+          receivedAt,
+        })
+        .where(eq(events.id, existingEvent.id))
+        .returning()
+    : await client
+        .insert(events)
+        .values({
+          jobId,
+          expectedRunId: nextExpectedRunId,
+          status,
+          receivedAt,
+          emailId,
+        })
+        .returning();
+
+  const [result] = await client
+    .update(emails)
+    .set({ matchedJobId: jobId, ingestedOk: true })
+    .where(eq(emails.id, emailId))
+    .returning();
+
+  if (run && status !== "UNKNOWN") {
+    await client
+      .update(expectedRuns)
+      .set({ status, linkedEventId: event.id })
+      .where(eq(expectedRuns.id, run.id));
+  }
+
+  await syncBackupEmailIncident({
+    client: client as unknown as Parameters<typeof syncBackupEmailIncident>[0]["client"],
+    jobId,
+    jobName: job?.name,
+    emailId,
+    expectedRunId: nextExpectedRunId,
+    status,
+    receivedAt,
+    subject: email.subject,
+    snippet: email.snippet,
+  });
+
+  return result;
+}
 
 export class DatabaseStorage implements IStorage {
   private decryptProxmoxHost<T extends { password: string }>(host: T): T {
@@ -198,6 +379,41 @@ export class DatabaseStorage implements IStorage {
   async createJob(data: InsertJob): Promise<Job> {
     const [result] = await db.insert(jobs).values(data).returning();
     return result;
+  }
+
+  async createJobFromEmail(
+    emailId: number,
+    data: InsertJob,
+    options: { createRule?: boolean } = {},
+  ): Promise<CreateJobFromEmailResult | undefined> {
+    return db.transaction(async (tx) => {
+      const [email] = await tx.select().from(emails).where(eq(emails.id, emailId));
+      if (!email) {
+        return undefined;
+      }
+
+      const [job] = await tx.insert(jobs).values(data).returning();
+      const linkedEmail = await linkEmailToJobInTransaction(tx as unknown as typeof db, emailId, job.id, email);
+      if (!linkedEmail) {
+        throw new Error("Created job could not be linked to email");
+      }
+
+      let rule: JobRule | undefined;
+      if (options.createRule && email.fromAddr) {
+        [rule] = await tx
+          .insert(jobRules)
+          .values({
+            jobId: job.id,
+            senderMatch: email.fromAddr,
+            subjectMatch: null,
+            bodyMatch: null,
+            priority: 0,
+          })
+          .returning();
+      }
+
+      return { job, email: linkedEmail, rule };
+    });
   }
 
   async updateJob(id: number, data: Partial<InsertJob>): Promise<Job | undefined> {
@@ -339,12 +555,25 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateRecipient(id: number, data: Partial<InsertRecipient>): Promise<Recipient | undefined> {
+    if (shouldPruneRecipientRoutesForUpdate(data)) {
+      return db.transaction(async (tx) => {
+        const [result] = await tx.update(recipients).set(data).where(eq(recipients.id, id)).returning();
+        if (result) {
+          await pruneRecipientFromNotificationRoutes(tx as unknown as typeof db, id);
+        }
+        return result;
+      });
+    }
+
     const [result] = await db.update(recipients).set(data).where(eq(recipients.id, id)).returning();
     return result;
   }
 
   async deleteRecipient(id: number): Promise<void> {
-    await db.delete(recipients).where(eq(recipients.id, id));
+    await db.transaction(async (tx) => {
+      await pruneRecipientFromNotificationRoutes(tx as unknown as typeof db, id);
+      await tx.delete(recipients).where(eq(recipients.id, id));
+    });
   }
 
   async getSettings(): Promise<AppSetting[]> {
@@ -466,112 +695,7 @@ export class DatabaseStorage implements IStorage {
 
   async linkEmailToJob(emailId: number, jobId: number): Promise<Email | undefined> {
     return db.transaction(async (tx) => {
-      const [email] = await tx.select().from(emails).where(eq(emails.id, emailId));
-      if (!email) {
-        return undefined;
-      }
-
-      const receivedAt = email.receivedAt || new Date();
-      const status = detectEventStatus(`${email.subject || ""}\n${email.snippet || ""}`);
-      const [run] = await tx
-        .select()
-        .from(expectedRuns)
-        .where(
-          and(
-            eq(expectedRuns.jobId, jobId),
-            eq(expectedRuns.status, "PENDING"),
-            lte(expectedRuns.scheduledFor, receivedAt),
-            gte(expectedRuns.deadlineAt, receivedAt),
-          ),
-        )
-        .orderBy(desc(expectedRuns.scheduledFor))
-        .limit(1);
-      const [job] = await tx.select().from(jobs).where(eq(jobs.id, jobId));
-      if (!job) {
-        return undefined;
-      }
-
-      const nextExpectedRunId = run?.id ?? null;
-      const [existingEvent] = await tx.select().from(events).where(eq(events.emailId, emailId)).limit(1);
-      if (existingEvent) {
-        const previousExpectedRunId = existingEvent.expectedRunId;
-        const previousFingerprint = backupEmailIncidentFingerprint({
-          emailId,
-          expectedRunId: previousExpectedRunId,
-        });
-        const nextFingerprint = backupEmailIncidentFingerprint({
-          emailId,
-          expectedRunId: nextExpectedRunId,
-        });
-
-        if (previousExpectedRunId && previousExpectedRunId !== nextExpectedRunId) {
-          await tx
-            .update(expectedRuns)
-            .set({ status: "PENDING", linkedEventId: null })
-            .where(
-              and(
-                eq(expectedRuns.id, previousExpectedRunId),
-                eq(expectedRuns.linkedEventId, existingEvent.id),
-              ),
-            );
-        }
-
-        if (previousFingerprint !== nextFingerprint) {
-          await tx
-            .update(incidents)
-            .set({ state: "RESOLVED", updatedAt: new Date() })
-            .where(eq(incidents.sourceFingerprint, previousFingerprint));
-        }
-      }
-
-      const [event] = existingEvent
-        ? await tx
-            .update(events)
-            .set({
-              jobId,
-              expectedRunId: nextExpectedRunId,
-              status,
-              receivedAt,
-            })
-            .where(eq(events.id, existingEvent.id))
-            .returning()
-        : await tx
-            .insert(events)
-            .values({
-              jobId,
-              expectedRunId: nextExpectedRunId,
-              status,
-              receivedAt,
-              emailId,
-            })
-            .returning();
-
-      const [result] = await tx
-        .update(emails)
-        .set({ matchedJobId: jobId, ingestedOk: true })
-        .where(eq(emails.id, emailId))
-        .returning();
-
-      if (run && status !== "UNKNOWN") {
-        await tx
-          .update(expectedRuns)
-          .set({ status, linkedEventId: event.id })
-          .where(eq(expectedRuns.id, run.id));
-      }
-
-      await syncBackupEmailIncident({
-        client: tx as unknown as Parameters<typeof syncBackupEmailIncident>[0]["client"],
-        jobId,
-        jobName: job?.name,
-        emailId,
-        expectedRunId: nextExpectedRunId,
-        status,
-        receivedAt,
-        subject: email.subject,
-        snippet: email.snippet,
-      });
-
-      return result;
+      return linkEmailToJobInTransaction(tx as unknown as typeof db, emailId, jobId);
     });
   }
 
@@ -828,3 +952,9 @@ export class DatabaseStorage implements IStorage {
 }
 
 export const storage = new DatabaseStorage();
+
+export const storageInternals = {
+  pruneRecipientFromRoutePayload,
+  routePayloadHasRecipients,
+  shouldPruneRecipientRoutesForUpdate,
+};
