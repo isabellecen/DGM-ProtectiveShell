@@ -81,7 +81,7 @@ async function pollConfiguredMailbox(settings: ImapSettings) {
     await client.login();
     const selected = await client.select(settings.folder);
     const mailboxKey = mailboxStorageKey(settings);
-    const checkpoint = await getCheckpoint(mailboxKey, selected.uidvalidity);
+    const checkpoint = await getCheckpoint(mailboxKey, selected.uidvalidity, settings.folder);
     const uids = selectUidsForPoll(
       await client.searchNewUids(checkpoint.lastSeenUid),
       checkpoint.lastSeenUid,
@@ -257,17 +257,34 @@ async function findMatchingRule(parsed: ParsedEmail, client: Pick<typeof db, "se
   });
 }
 
-async function getCheckpoint(folder: string, uidvalidity: number) {
+function checkpointLastSeenUid(
+  scopedCheckpoint: { uidvalidity: number; lastSeenUid: number } | undefined,
+  legacyCheckpoint: { uidvalidity: number; lastSeenUid: number } | undefined,
+  uidvalidity: number,
+): number {
+  if (scopedCheckpoint) {
+    return scopedCheckpoint.uidvalidity === uidvalidity ? scopedCheckpoint.lastSeenUid : 0;
+  }
+  if (legacyCheckpoint?.uidvalidity === uidvalidity) {
+    return legacyCheckpoint.lastSeenUid;
+  }
+  return 0;
+}
+
+async function getCheckpoint(folder: string, uidvalidity: number, legacyFolder?: string) {
   const [checkpoint] = await db
     .select()
     .from(imapCheckpoints)
     .where(eq(imapCheckpoints.folder, folder));
 
-  if (!checkpoint || checkpoint.uidvalidity !== uidvalidity) {
-    return { lastSeenUid: 0 };
-  }
+  const [legacyCheckpoint] = !checkpoint && legacyFolder && legacyFolder !== folder
+    ? await db
+        .select()
+        .from(imapCheckpoints)
+        .where(eq(imapCheckpoints.folder, legacyFolder))
+    : [];
 
-  return checkpoint;
+  return { lastSeenUid: checkpointLastSeenUid(checkpoint, legacyCheckpoint, uidvalidity) };
 }
 
 async function upsertCheckpoint(folder: string, uidvalidity: number, lastSeenUid: number) {
@@ -459,6 +476,7 @@ export async function parseEmailSource(raw: string): Promise<ParsedEmail> {
 }
 
 export const emailPollerInternals = {
+  checkpointLastSeenUid,
   mailboxStorageKey,
 };
 

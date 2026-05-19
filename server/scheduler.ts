@@ -236,13 +236,15 @@ async function produceExpectedRuns() {
 }
 
 export function scheduledTimesForProducer(
-  job: Pick<typeof jobs.$inferSelect, "scheduleTime" | "scheduleType" | "daysOfWeek" | "longRunning" | "longWindowHours" | "windowHours">,
+  job: Pick<typeof jobs.$inferSelect, "scheduleTime" | "scheduleType" | "daysOfWeek" | "longRunning" | "longWindowHours" | "windowHours"> & { createdAt?: Date | null },
   now: Date,
   timezone = "UTC",
 ): Date[] {
   const windowHours = job.longRunning ? job.longWindowHours || job.windowHours : job.windowHours;
   const catchupDays = Math.max(8, Math.ceil(windowHours / 24) + 1);
-  return scheduledTimesForOffsets(job, now, timezone, -catchupDays, 1, () => true);
+  return scheduledTimesForOffsets(job, now, timezone, -catchupDays, 1, (scheduled) => {
+    return !job.createdAt || scheduled >= job.createdAt;
+  });
 }
 
 export function nextScheduledTimes(

@@ -40,6 +40,21 @@ test("mailbox storage keys separate accounts that share folder and UID values", 
   assert.equal(first.includes("backup-a"), false);
 });
 
+test("checkpoint selection falls back to legacy folder checkpoint once", () => {
+  assert.equal(
+    emailPollerInternals.checkpointLastSeenUid(undefined, { uidvalidity: 7, lastSeenUid: 120 }, 7),
+    120,
+  );
+  assert.equal(
+    emailPollerInternals.checkpointLastSeenUid({ uidvalidity: 7, lastSeenUid: 130 }, { uidvalidity: 7, lastSeenUid: 120 }, 7),
+    130,
+  );
+  assert.equal(
+    emailPollerInternals.checkpointLastSeenUid(undefined, { uidvalidity: 6, lastSeenUid: 120 }, 7),
+    0,
+  );
+});
+
 test("parseEmailSource extracts headers and snippet from IMAP fetch output", async () => {
   const parsed = await parseEmailSource(`* 1 FETCH (UID 12 BODY[]<0> {220}
 Message-ID: <abc@example.com>

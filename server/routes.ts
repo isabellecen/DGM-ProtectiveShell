@@ -218,7 +218,7 @@ const notificationRouteCreateSchema = z.object({
   scopeId: nullableIdSchema.optional(),
   eventType: z.enum(["FAIL", "MISSING", "WARN", "DAILY_REPORT", "MONITOR_DOWN"]),
   severityMin: z.enum(["INFO", "WARN", "CRIT"]).default("WARN"),
-  recipientsJson: z.array(idParamSchema).default([]),
+  recipientsJson: z.array(idParamSchema).min(1, "Select at least one recipient"),
 }).strict().superRefine((data, ctx) => {
   if (data.scopeType !== "GLOBAL" && !data.scopeId) {
     ctx.addIssue({
@@ -241,6 +241,21 @@ function badRequest(message: string): Error & { status: number } {
   const err = new Error(message) as Error & { status: number };
   err.status = 400;
   return err;
+}
+
+function notFound(message: string): Error & { status: number } {
+  const err = new Error(message) as Error & { status: number };
+  err.status = 404;
+  return err;
+}
+
+async function assertCustomerReferenceExists(customerId?: number | null) {
+  if (customerId == null) {
+    return;
+  }
+  if (!(await storage.getCustomer(customerId))) {
+    throw notFound("Customer not found");
+  }
 }
 
 function assertJobPatchScheduleValid(
@@ -344,6 +359,7 @@ export async function registerRoutes(
 
   app.post("/api/jobs", async (req, res) => {
     const data = jobCreateSchema.parse(req.body);
+    await assertCustomerReferenceExists(data.customerId);
     const result = await storage.createJob({
       ...data,
       customerId: data.customerId ?? null,
@@ -357,6 +373,7 @@ export async function registerRoutes(
     const existing = await storage.getJob(id);
     if (!existing) return res.status(404).json({ message: "Not found" });
     assertJobPatchScheduleValid(existing, data);
+    await assertCustomerReferenceExists(data.customerId);
     const result = await storage.updateJob(id, data);
     if (!result) return res.status(404).json({ message: "Not found" });
     res.json(result);
@@ -388,6 +405,7 @@ export async function registerRoutes(
   app.post("/api/proxmox-hosts", async (req, res) => {
     const data = proxmoxHostCreateSchema.parse(req.body);
     assertInsecureTargetAllowed("SSH host key", data.allowInsecureHostKey);
+    await assertCustomerReferenceExists(data.customerId);
     await assertTargetHostAllowed(data.host);
     const result = await storage.createProxmoxHost({
       ...data,
@@ -404,6 +422,7 @@ export async function registerRoutes(
 
     const updateData = proxmoxHostPatchSchema.parse(req.body);
     assertInsecureTargetAllowed("SSH host key", updateData.allowInsecureHostKey);
+    await assertCustomerReferenceExists(updateData.customerId);
     if (updateData.host) {
       await assertTargetHostAllowed(updateData.host);
     }
@@ -455,6 +474,7 @@ export async function registerRoutes(
   app.post("/api/backup-targets", async (req, res) => {
     const data = backupTargetCreateSchema.parse(req.body);
     assertInsecureTargetAllowed("target TLS", data.allowInsecureTls);
+    await assertCustomerReferenceExists(data.customerId);
     await assertTargetHostAllowed(data.host);
     const result = await storage.createBackupTarget({
       ...data,
@@ -471,6 +491,7 @@ export async function registerRoutes(
     if (!existing) return res.status(404).json({ message: "Not found" });
     const updateData = backupTargetPatchSchema.parse(req.body);
     assertInsecureTargetAllowed("target TLS", updateData.allowInsecureTls);
+    await assertCustomerReferenceExists(updateData.customerId);
     if (updateData.host) {
       await assertTargetHostAllowed(updateData.host);
     }
@@ -515,6 +536,7 @@ export async function registerRoutes(
 
   app.post("/api/recipients", async (req, res) => {
     const { name, email, type, customerId, enabled } = recipientCreateSchema.parse(req.body);
+    await assertCustomerReferenceExists(customerId);
     const result = await storage.createRecipient({
       name,
       email,
@@ -528,6 +550,7 @@ export async function registerRoutes(
   app.patch("/api/recipients/:id", async (req, res) => {
     const id = parseId(req.params.id);
     const data = recipientPatchSchema.parse(req.body);
+    await assertCustomerReferenceExists(data.customerId);
     const result = await storage.updateRecipient(id, data);
     if (!result) return res.status(404).json({ message: "Not found" });
     res.json(result);
@@ -623,6 +646,7 @@ export async function registerRoutes(
   app.post("/api/emails/:id/create-job", async (req, res) => {
     const emailId = parseId(req.params.id);
     const { job, createRule } = emailCreateJobSchema.parse(req.body);
+    await assertCustomerReferenceExists(job.customerId);
     const result = await storage.createJobFromEmail(
       emailId,
       {
@@ -722,6 +746,7 @@ export async function registerRoutes(
 }
 
 export const routeInternals = {
+  assertCustomerReferenceExists,
   jobRuleCreateSchema,
   emailCreateJobSchema,
   notificationRouteCreateSchema,

@@ -194,11 +194,22 @@ function recipientsForMatchingRoutes(
   matchingRoutes: Pick<typeof notificationRoutes.$inferSelect, "recipientsJson">[],
   allRecipients: Recipient[],
 ): Recipient[] | null {
-  if (matchingRoutes.length === 0) {
+  const routesWithRecipients = matchingRoutes.filter((route) => routeHasRecipientReferences(route.recipientsJson));
+  if (routesWithRecipients.length === 0) {
     return null;
   }
 
-  return uniqueRecipients(matchingRoutes.flatMap((route) => recipientsFromRoute(route.recipientsJson, allRecipients)));
+  return uniqueRecipients(routesWithRecipients.flatMap((route) => recipientsFromRoute(route.recipientsJson, allRecipients)));
+}
+
+function routeHasRecipientReferences(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.some((entry) => routeHasRecipientReferences(entry));
+  }
+  if (value && typeof value === "object") {
+    return Object.values(value as Record<string, unknown>).some((entry) => routeHasRecipientReferences(entry));
+  }
+  return value != null && value !== "";
 }
 
 function recipientsFromRoute(value: unknown, allRecipients: Recipient[]): Recipient[] {
@@ -514,4 +525,5 @@ export const notificationServiceInternals = {
   dotStuffBody,
   formatMessage,
   normalizeSmtpAddress,
+  routeHasRecipientReferences,
 };

@@ -198,6 +198,16 @@ async function pruneRecipientFromNotificationRoutes(client: typeof db, recipient
   }
 }
 
+async function deleteScopedNotificationRoutes(
+  client: typeof db,
+  scopeType: "CUSTOMER" | "JOB",
+  scopeId: number,
+): Promise<void> {
+  await client
+    .delete(notificationRoutes)
+    .where(and(eq(notificationRoutes.scopeType, scopeType), eq(notificationRoutes.scopeId, scopeId)));
+}
+
 async function linkEmailToJobInTransaction(
   client: typeof db,
   emailId: number,
@@ -342,6 +352,7 @@ export class DatabaseStorage implements IStorage {
 
   async deleteCustomer(id: number): Promise<void> {
     await db.transaction(async (tx) => {
+      await deleteScopedNotificationRoutes(tx as unknown as typeof db, "CUSTOMER", id);
       await tx.update(jobs).set({ customerId: null }).where(eq(jobs.customerId, id));
       await tx.update(recipients).set({ customerId: null }).where(eq(recipients.customerId, id));
       await tx.update(proxmoxHosts).set({ customerId: null }).where(eq(proxmoxHosts.customerId, id));
@@ -364,6 +375,7 @@ export class DatabaseStorage implements IStorage {
         longRunning: jobs.longRunning,
         longWindowHours: jobs.longWindowHours,
         enabled: jobs.enabled,
+        createdAt: jobs.createdAt,
         customerName: customers.name,
       })
       .from(jobs)
@@ -423,6 +435,7 @@ export class DatabaseStorage implements IStorage {
 
   async deleteJob(id: number): Promise<void> {
     await db.transaction(async (tx) => {
+      await deleteScopedNotificationRoutes(tx as unknown as typeof db, "JOB", id);
       await tx
         .update(incidents)
         .set({ state: "RESOLVED", updatedAt: new Date() })
@@ -954,6 +967,7 @@ export class DatabaseStorage implements IStorage {
 export const storage = new DatabaseStorage();
 
 export const storageInternals = {
+  deleteScopedNotificationRoutes,
   pruneRecipientFromRoutePayload,
   routePayloadHasRecipients,
   shouldPruneRecipientRoutesForUpdate,

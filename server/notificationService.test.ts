@@ -29,6 +29,13 @@ test("matching notification routes with no valid recipients do not request fallb
     ),
     [],
   );
+  assert.equal(
+    notificationServiceInternals.recipientsForMatchingRoutes(
+      [{ recipientsJson: null }],
+      allRecipients as any,
+    ),
+    null,
+  );
   assert.equal(notificationServiceInternals.recipientsForMatchingRoutes([], allRecipients as any), null);
 });
 

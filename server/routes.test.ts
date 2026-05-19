@@ -37,6 +37,17 @@ test("notification route validation requires ids for scoped routes", () => {
       scopeType: "CUSTOMER",
       scopeId: null,
       eventType: "FAIL",
+      recipientsJson: [1],
+    }).success,
+    false,
+  );
+});
+
+test("notification route validation rejects empty recipient routes", () => {
+  assert.equal(
+    routeInternals.notificationRouteCreateSchema.safeParse({
+      scopeType: "GLOBAL",
+      eventType: "FAIL",
       recipientsJson: [],
     }).success,
     false,

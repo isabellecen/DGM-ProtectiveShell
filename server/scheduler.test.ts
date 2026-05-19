@@ -62,6 +62,7 @@ test("scheduledTimesForProducer includes recent overdue runs for catch-up", () =
     longRunning: false,
     longWindowHours: 24,
     windowHours: 6,
+    createdAt: new Date("2026-05-01T00:00:00.000Z"),
   };
 
   const times = scheduledTimesForProducer(job, new Date("2026-05-05T20:00:00.000Z"), "America/Phoenix")
@@ -79,12 +80,31 @@ test("scheduledTimesForProducer catches weekly runs after downtime", () => {
     longRunning: false,
     longWindowHours: 24,
     windowHours: 6,
+    createdAt: new Date("2026-05-01T00:00:00.000Z"),
   };
 
   const times = scheduledTimesForProducer(job, new Date("2026-05-11T16:00:00.000Z"), "America/Phoenix")
     .map((time) => time.toISOString());
 
   assert(times.includes("2026-05-10T05:00:00.000Z"));
+});
+
+test("scheduledTimesForProducer does not backfill runs before a job existed", () => {
+  const job = {
+    scheduleTime: "02:00",
+    scheduleType: "daily",
+    daysOfWeek: [],
+    longRunning: false,
+    longWindowHours: 24,
+    windowHours: 6,
+    createdAt: new Date("2026-05-05T16:00:00.000Z"),
+  };
+
+  const times = scheduledTimesForProducer(job, new Date("2026-05-05T20:00:00.000Z"), "America/Phoenix")
+    .map((time) => time.toISOString());
+
+  assert.equal(times.includes("2026-05-05T09:00:00.000Z"), false);
+  assert(times.includes("2026-05-06T09:00:00.000Z"));
 });
 
 test("retentionDaysFromValue accepts positive integers and falls back safely", () => {

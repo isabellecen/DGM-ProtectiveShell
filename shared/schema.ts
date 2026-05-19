@@ -36,6 +36,7 @@ export const jobs = pgTable("jobs", {
   longRunning: boolean("long_running").notNull().default(false),
   longWindowHours: integer("long_window_hours").default(24),
   enabled: boolean("enabled").notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   check("jobs_system_type_check", sql`${table.systemType} IN ('VEEAM', 'PBS', 'SYNOLOGY')`),
   check("jobs_schedule_type_check", sql`${table.scheduleType} IN ('daily', 'weekly')`),
@@ -44,7 +45,7 @@ export const jobs = pgTable("jobs", {
   index("jobs_enabled_idx").on(table.enabled),
 ]);
 
-export const insertJobSchema = createInsertSchema(jobs).omit({ id: true });
+export const insertJobSchema = createInsertSchema(jobs).omit({ id: true, createdAt: true });
 export type InsertJob = z.infer<typeof insertJobSchema>;
 export type Job = typeof jobs.$inferSelect;
 
