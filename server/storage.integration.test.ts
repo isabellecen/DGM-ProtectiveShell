@@ -196,6 +196,15 @@ if (!runIntegrationTests) {
         | undefined;
       assert.equal(afterClear?.value, "");
       assert.equal(afterClear?.hasValue, false);
+
+      await db.delete(appSettings).where(eq(appSettings.key, key));
+      const afterMissingBlankSave = await storage.upsertSetting(key, "");
+      assert.equal(afterMissingBlankSave.value, "");
+      assert.equal(await storage.getSettingValue(key), undefined);
+      const missingBlankSecret = (await storage.getSettings()).find((setting) => setting.key === key) as
+        | ({ hasValue?: boolean } & Awaited<ReturnType<typeof storage.getSettings>>[number])
+        | undefined;
+      assert.equal(missingBlankSecret?.hasValue, false);
     } finally {
       await db.delete(appSettings).where(eq(appSettings.key, key));
     }

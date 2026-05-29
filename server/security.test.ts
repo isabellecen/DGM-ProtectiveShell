@@ -38,3 +38,24 @@ test("production CSP allows bundled font providers", () => {
   assert.match(csp, /style-src 'self' 'unsafe-inline' https:\/\/fonts\.googleapis\.com/);
   assert.match(csp, /font-src 'self' https:\/\/fonts\.gstatic\.com/);
 });
+
+test("login rate limit max falls back for invalid values", () => {
+  const previous = process.env.LOGIN_RATE_LIMIT_MAX;
+
+  try {
+    process.env.LOGIN_RATE_LIMIT_MAX = "12";
+    assert.equal(securityInternals.loginRateLimitMax(), 12);
+
+    process.env.LOGIN_RATE_LIMIT_MAX = "0";
+    assert.equal(securityInternals.loginRateLimitMax(), 8);
+
+    process.env.LOGIN_RATE_LIMIT_MAX = "bad";
+    assert.equal(securityInternals.loginRateLimitMax(), 8);
+
+    process.env.LOGIN_RATE_LIMIT_MAX = "2.5";
+    assert.equal(securityInternals.loginRateLimitMax(), 8);
+  } finally {
+    if (previous === undefined) delete process.env.LOGIN_RATE_LIMIT_MAX;
+    else process.env.LOGIN_RATE_LIMIT_MAX = previous;
+  }
+});

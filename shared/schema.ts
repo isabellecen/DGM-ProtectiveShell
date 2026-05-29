@@ -104,6 +104,29 @@ export const insertEmailSchema = createInsertSchema(emails).omit({ id: true });
 export type InsertEmail = z.infer<typeof insertEmailSchema>;
 export type Email = typeof emails.$inferSelect;
 
+export const emailIngestionFailures = pgTable("email_ingestion_failures", {
+  id: serial("id").primaryKey(),
+  mailboxKey: text("mailbox_key").notNull(),
+  uidvalidity: integer("uidvalidity").notNull(),
+  uid: integer("uid").notNull(),
+  errorMessage: text("error_message").notNull(),
+  rawExcerpt: text("raw_excerpt"),
+  attemptCount: integer("attempt_count").notNull().default(1),
+  firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).notNull().defaultNow(),
+  lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("email_ingestion_failures_mailbox_uid_idx").on(table.mailboxKey, table.uidvalidity, table.uid),
+  index("email_ingestion_failures_last_seen_idx").on(table.lastSeenAt),
+]);
+
+export const insertEmailIngestionFailureSchema = createInsertSchema(emailIngestionFailures).omit({
+  id: true,
+  firstSeenAt: true,
+  lastSeenAt: true,
+});
+export type InsertEmailIngestionFailure = z.infer<typeof insertEmailIngestionFailureSchema>;
+export type EmailIngestionFailure = typeof emailIngestionFailures.$inferSelect;
+
 export const events = pgTable("events", {
   id: serial("id").primaryKey(),
   jobId: integer("job_id").references(() => jobs.id).notNull(),
@@ -235,12 +258,12 @@ export const backupTargets = pgTable("backup_targets", {
   totalBytes: text("total_bytes"),
   usedBytes: text("used_bytes"),
   lastPolledAt: timestamp("last_polled_at", { withTimezone: true }),
-  pollStatus: text("poll_status").default("UNKNOWN"), // OK, ERROR, UNKNOWN
+  pollStatus: text("poll_status").default("UNKNOWN"), // OK, WARN, ERROR, UNKNOWN
   pollError: text("poll_error"),
   datastoresJson: jsonb("datastores_json"),
 }, (table) => [
   check("backup_targets_type_check", sql`${table.type} IN ('SYNOLOGY', 'PBS')`),
-  check("backup_targets_poll_status_check", sql`${table.pollStatus} IS NULL OR ${table.pollStatus} IN ('OK', 'ERROR', 'UNKNOWN')`),
+  check("backup_targets_poll_status_check", sql`${table.pollStatus} IS NULL OR ${table.pollStatus} IN ('OK', 'WARN', 'ERROR', 'UNKNOWN')`),
   index("backup_targets_enabled_idx").on(table.enabled),
   index("backup_targets_customer_id_idx").on(table.customerId),
 ]);

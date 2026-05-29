@@ -336,6 +336,7 @@ function TargetCard({
   const percent = getUsagePercent(target.usedBytes, target.totalBytes);
   const hasCapacity = target.totalBytes && target.usedBytes;
   const isError = target.pollStatus === "ERROR";
+  const isWarn = target.pollStatus === "WARN";
   const isDisabled = !target.enabled;
 
   return (
@@ -368,7 +369,7 @@ function TargetCard({
         </div>
         <div className="flex items-center gap-1">
           {isDisabled && <Badge variant="secondary" className="text-[10px]">Disabled</Badge>}
-          <StatusBadge status={isError ? "CRIT" : isDisabled ? "UNKNOWN" : hasCapacity ? (percent >= 90 ? "WARN" : "OK") : "UNKNOWN"} />
+          <StatusBadge status={isError ? "CRIT" : isWarn ? "WARN" : isDisabled ? "UNKNOWN" : hasCapacity ? (percent >= 90 ? "WARN" : "OK") : "UNKNOWN"} />
           <Button
             size="icon"
             variant="ghost"
@@ -391,10 +392,13 @@ function TargetCard({
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        {isError && (
-          <div className="flex items-center gap-2 text-sm text-red-600 dark:text-red-400" data-testid={`text-error-${target.id}`}>
+        {(isError || isWarn) && (
+          <div
+            className={`flex items-center gap-2 text-sm ${isError ? "text-red-600 dark:text-red-400" : "text-amber-600 dark:text-amber-400"}`}
+            data-testid={`text-error-${target.id}`}
+          >
             <AlertTriangle className="h-4 w-4 shrink-0" />
-            <span className="truncate">{target.pollError || "Connection error"}</span>
+            <span className="truncate">{target.pollError || (isError ? "Connection error" : "Partial capacity data")}</span>
           </div>
         )}
 
@@ -420,18 +424,25 @@ function TargetCard({
             </div>
             {datastores.map((ds, i) => (
               <div key={i} className="pl-0" data-testid={`row-datastore-${target.id}-${i}`}>
-                <UsageBar
-                  used={ds.usedBytes ?? ds.used_bytes ?? null}
-                  total={ds.totalBytes ?? ds.total_bytes ?? null}
-                  label={ds.name}
-                  detail={
-                    ds.snapshotCount != null
-                      ? `${ds.snapshotCount} snapshots`
-                      : ds.shareCount != null
-                      ? `${ds.shareCount} shares`
-                      : undefined
-                  }
-                />
+                {ds.error ? (
+                  <div className="flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-2 text-sm text-amber-700 dark:text-amber-300">
+                    <AlertTriangle className="h-4 w-4 shrink-0" />
+                    <span className="truncate">{ds.name || "Datastore"}: {ds.error}</span>
+                  </div>
+                ) : (
+                  <UsageBar
+                    used={ds.usedBytes ?? ds.used_bytes ?? null}
+                    total={ds.totalBytes ?? ds.total_bytes ?? null}
+                    label={ds.name}
+                    detail={
+                      ds.snapshotCount != null
+                        ? `${ds.snapshotCount} snapshots`
+                        : ds.shareCount != null
+                        ? `${ds.shareCount} shares`
+                        : undefined
+                    }
+                  />
+                )}
               </div>
             ))}
           </div>
@@ -545,6 +556,13 @@ export default function BackupStorage() {
     return p >= 75 && p < 90;
   });
   const errorTargets = enabledTargets.filter((t) => t.pollStatus === "ERROR");
+  const partialTargets = enabledTargets.filter((t) => t.pollStatus === "WARN");
+  const warningTargetCount = new Set([
+    ...criticalTargets.map((target) => target.id),
+    ...warningTargets.map((target) => target.id),
+    ...errorTargets.map((target) => target.id),
+    ...partialTargets.map((target) => target.id),
+  ]).size;
 
   return (
     <div className="p-6">
@@ -600,16 +618,18 @@ export default function BackupStorage() {
                 <AlertTriangle className="h-4 w-4 text-muted-foreground" />
               </CardHeader>
               <CardContent>
-                <div className={`text-2xl font-bold ${criticalTargets.length > 0 ? "text-red-600 dark:text-red-400" : warningTargets.length > 0 ? "text-amber-600 dark:text-amber-400" : ""}`} data-testid="text-warnings">
-                  {criticalTargets.length + warningTargets.length + errorTargets.length}
+                <div className={`text-2xl font-bold ${criticalTargets.length > 0 || errorTargets.length > 0 ? "text-red-600 dark:text-red-400" : warningTargets.length > 0 || partialTargets.length > 0 ? "text-amber-600 dark:text-amber-400" : ""}`} data-testid="text-warnings">
+                  {warningTargetCount}
                 </div>
                 <p className="text-xs text-muted-foreground mt-1">
                   {criticalTargets.length > 0 && `${criticalTargets.length} critical`}
                   {criticalTargets.length > 0 && warningTargets.length > 0 && ", "}
                   {warningTargets.length > 0 && `${warningTargets.length} high usage`}
-                  {(criticalTargets.length > 0 || warningTargets.length > 0) && errorTargets.length > 0 && ", "}
+                  {(criticalTargets.length > 0 || warningTargets.length > 0) && partialTargets.length > 0 && ", "}
+                  {partialTargets.length > 0 && `${partialTargets.length} partial`}
+                  {(criticalTargets.length > 0 || warningTargets.length > 0 || partialTargets.length > 0) && errorTargets.length > 0 && ", "}
                   {errorTargets.length > 0 && `${errorTargets.length} errors`}
-                  {criticalTargets.length === 0 && warningTargets.length === 0 && errorTargets.length === 0 && "All targets healthy"}
+                  {warningTargetCount === 0 && "All targets healthy"}
                 </p>
               </CardContent>
             </Card>

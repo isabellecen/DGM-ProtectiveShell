@@ -110,3 +110,13 @@ test("backup target default ports match supported server types", () => {
   assert.equal(routeInternals.defaultBackupTargetPort("PBS"), 8007);
   assert.equal(routeInternals.defaultBackupTargetPort("SYNOLOGY"), 5001);
 });
+
+test("pagination query validation applies defaults and bounds", () => {
+  assert.deepEqual(routeInternals.paginationQuerySchema.parse({}), { limit: 100, offset: 0 });
+  assert.deepEqual(routeInternals.paginationQuerySchema.parse({ limit: "25", offset: "50" }), {
+    limit: 25,
+    offset: 50,
+  });
+  assert.equal(routeInternals.paginationQuerySchema.safeParse({ limit: "500" }).success, false);
+  assert.equal(routeInternals.paginationQuerySchema.safeParse({ offset: "-1" }).success, false);
+});

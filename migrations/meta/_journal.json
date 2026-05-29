@@ -15,6 +15,13 @@
       "when": 1779223460932,
       "tag": "0001_burly_redwing",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1779994812238,
+      "tag": "0002_silky_rogue",
+      "breakpoints": true
     }
   ]
 }

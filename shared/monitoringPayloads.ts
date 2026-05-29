@@ -10,6 +10,7 @@ export const backupDatastoreSchema = z
     usedBytes: z.string().optional(),
     used_bytes: z.string().optional(),
     status: z.string().optional(),
+    error: z.string().optional(),
     snapshotCount: z.number().int().nonnegative().nullable().optional(),
     shareCount: z.number().int().nonnegative().nullable().optional(),
   })

@@ -94,3 +94,61 @@ Content-Type: text/html; charset=utf-8
   assert.equal(parsed.subject, "Multipart report");
   assert.equal(parsed.snippet, "Backup completed successfully.");
 });
+
+test("mailbox UID processing records per-message failures and advances handled checkpoints", async () => {
+  const handled: number[] = [];
+  const failures: number[] = [];
+  const checkpoints: number[] = [];
+
+  const maxUid = await emailPollerInternals.processMailboxUids({
+    uids: [3, 4, 5],
+    lastSeenUid: 2,
+    fetchMessage: async (uid: number) => `message-${uid}`,
+    handleMessage: async (uid: number) => {
+      if (uid === 4) {
+        throw new Error("bad MIME");
+      }
+      handled.push(uid);
+    },
+    recordFailure: async (uid: number) => {
+      failures.push(uid);
+    },
+    checkpoint: async (uid: number) => {
+      checkpoints.push(uid);
+    },
+  });
+
+  assert.equal(maxUid, 5);
+  assert.deepEqual(handled, [3, 5]);
+  assert.deepEqual(failures, [4]);
+  assert.deepEqual(checkpoints, [3, 4, 5]);
+});
+
+test("mailbox UID processing treats connection failures as fatal without advancing that UID", async () => {
+  const failures: number[] = [];
+  const checkpoints: number[] = [];
+
+  await assert.rejects(
+    emailPollerInternals.processMailboxUids({
+      uids: [3, 4, 5],
+      lastSeenUid: 2,
+      fetchMessage: async (uid: number) => {
+        if (uid === 4) {
+          throw new Error("IMAP_TIMEOUT");
+        }
+        return `message-${uid}`;
+      },
+      handleMessage: async () => undefined,
+      recordFailure: async (uid: number) => {
+        failures.push(uid);
+      },
+      checkpoint: async (uid: number) => {
+        checkpoints.push(uid);
+      },
+    }),
+    /IMAP_TIMEOUT/,
+  );
+
+  assert.deepEqual(failures, []);
+  assert.deepEqual(checkpoints, [3]);
+});

@@ -232,6 +232,10 @@ const notificationRouteCreateSchema = z.object({
 const retentionRunSchema = z.object({
   retentionDays: z.coerce.number().int().min(1).max(3650).optional(),
 }).strict();
+const paginationQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(200).default(100),
+  offset: z.coerce.number().int().min(0).default(0),
+}).strict();
 
 function parseId(value: unknown) {
   return idParamSchema.parse(value);
@@ -605,7 +609,8 @@ export async function registerRoutes(
   });
 
   app.get("/api/emails/unmatched", async (_req, res) => {
-    const result = await storage.getUnmatchedEmails();
+    const { limit, offset } = paginationQuerySchema.parse(_req.query);
+    const result = await storage.getUnmatchedEmails(limit, offset);
     res.json(result);
   });
 
@@ -617,6 +622,12 @@ export async function registerRoutes(
   app.get("/api/emails/unmatched-count", async (_req, res) => {
     const count = await storage.getUnmatchedEmailCount();
     res.json({ count });
+  });
+
+  app.get("/api/emails/ingestion-failures", async (req, res) => {
+    const { limit, offset } = paginationQuerySchema.parse(req.query);
+    const result = await storage.getEmailIngestionFailures(limit, offset);
+    res.json(result);
   });
 
   app.get("/api/emails/:id", async (req, res) => {
@@ -751,6 +762,7 @@ export const routeInternals = {
   emailCreateJobSchema,
   notificationRouteCreateSchema,
   settingSchema,
+  paginationQuerySchema,
   assertRecipientsExist,
   assertJobPatchScheduleValid,
   defaultBackupTargetPort,

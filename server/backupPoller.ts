@@ -10,7 +10,7 @@ export type PollResult = {
   totalBytes: string | null;
   usedBytes: string | null;
   datastoresJson: BackupDatastore[] | null;
-  pollStatus: "OK" | "ERROR";
+  pollStatus: "OK" | "WARN" | "ERROR";
   pollError: string | null;
 };
 
@@ -240,6 +240,7 @@ async function pollPBS(input: TargetInput): Promise<PollResult> {
   const datastores: BackupDatastore[] = [];
   let totalBytes = BigInt(0);
   let usedBytes = BigInt(0);
+  const datastoreErrors: string[] = [];
 
   for (const ds of dsRes.data) {
     const name = ds.store || ds.name;
@@ -248,45 +249,51 @@ async function pollPBS(input: TargetInput): Promise<PollResult> {
         headers: authHeaders,
       }, input);
 
-      if (statusRes.data) {
-        const dsTotal = BigInt(statusRes.data.total || 0);
-        const dsUsed = BigInt(statusRes.data.used || 0);
-        totalBytes += dsTotal;
-        usedBytes += dsUsed;
-
-        // Get snapshot count
-        let snapshotCount: number | undefined;
-        try {
-          const snapRes = await fetchTargetApi(`${base}/admin/datastore/${name}/snapshots`, {
-            headers: authHeaders,
-          }, input);
-          if (snapRes.data && Array.isArray(snapRes.data)) {
-            snapshotCount = snapRes.data.length;
-          }
-        } catch {}
-
-        datastores.push({
-          name,
-          totalBytes: dsTotal.toString(),
-          usedBytes: dsUsed.toString(),
-          snapshotCount,
-        });
+      if (!statusRes.data) {
+        throw new Error("Datastore status unavailable");
       }
-    } catch {
-      datastores.push({ name, totalBytes: "0", usedBytes: "0" });
+
+      const dsTotal = BigInt(statusRes.data.total || 0);
+      const dsUsed = BigInt(statusRes.data.used || 0);
+      totalBytes += dsTotal;
+      usedBytes += dsUsed;
+
+      // Get snapshot count
+      let snapshotCount: number | undefined;
+      try {
+        const snapRes = await fetchTargetApi(`${base}/admin/datastore/${name}/snapshots`, {
+          headers: authHeaders,
+        }, input);
+        if (snapRes.data && Array.isArray(snapRes.data)) {
+          snapshotCount = snapRes.data.length;
+        }
+      } catch {}
+
+      datastores.push({
+        name,
+        totalBytes: dsTotal.toString(),
+        usedBytes: dsUsed.toString(),
+        snapshotCount,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      datastoreErrors.push(`${name}: ${message}`);
+      datastores.push({ name, totalBytes: "0", usedBytes: "0", status: "ERROR", error: message });
     }
   }
 
-  if (datastores.length === 0) {
-    return { totalBytes: null, usedBytes: null, datastoresJson: null, pollStatus: "ERROR", pollError: "No datastores found" };
+  const usableDatastores = datastores.length - datastoreErrors.length;
+  if (datastores.length === 0 || usableDatastores === 0) {
+    const errorSummary = datastoreErrors.length > 0 ? datastoreErrors.join("; ") : "No datastores found";
+    return { totalBytes: null, usedBytes: null, datastoresJson: datastores.length > 0 ? datastores : null, pollStatus: "ERROR", pollError: errorSummary };
   }
 
   return {
     totalBytes: totalBytes.toString(),
     usedBytes: usedBytes.toString(),
     datastoresJson: datastores,
-    pollStatus: "OK",
-    pollError: null,
+    pollStatus: datastoreErrors.length > 0 ? "WARN" : "OK",
+    pollError: datastoreErrors.length > 0 ? datastoreErrors.join("; ") : null,
   };
 }
 

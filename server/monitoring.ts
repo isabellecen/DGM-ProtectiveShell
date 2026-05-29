@@ -50,7 +50,7 @@ export async function runProxmoxHostCheck(hostId: number) {
     monitoringError: result.monitoring_error,
   });
 
-  const failed = result.monitoring_error !== null || result.overall_status === "UNKNOWN";
+  const { failed, incompleteHealthData } = classifyProxmoxCheckResult(result);
   const consecutiveFailures = failed ? host.consecutiveFailures + 1 : 0;
   await storage.updateProxmoxHost(hostId, {
     lastCheckAt: checkedAt,
@@ -75,7 +75,18 @@ export async function runProxmoxHostCheck(hostId: number) {
         sourceFingerprint: `proxmox:${hostId}:unreachable`,
       });
     }
+  } else if (incompleteHealthData) {
+    await resolveOperationalIncidents("PROXMOX", hostId, `proxmox:${hostId}:health`);
+    await upsertOperationalIncident({
+      sourceType: "PROXMOX",
+      sourceId: hostId,
+      severity: "WARN",
+      title: `${host.name} health data is incomplete`,
+      details: "SSH succeeded, but storage and SMART health data could not be collected.",
+      sourceFingerprint: `proxmox:${hostId}:health-data`,
+    });
   } else if (result.overall_status === "WARN" || result.overall_status === "CRIT") {
+    await resolveOperationalIncidents("PROXMOX", hostId, `proxmox:${hostId}:health-data`);
     await upsertOperationalIncident({
       sourceType: "PROXMOX",
       sourceId: hostId,
@@ -129,7 +140,7 @@ export async function pollBackupTargetAndPersist(targetId: number) {
     pollError: result.pollError,
   };
 
-  if (result.pollStatus === "OK" && result.totalBytes && result.usedBytes) {
+  if (result.pollStatus !== "ERROR" && result.totalBytes && result.usedBytes) {
     updateData.totalBytes = result.totalBytes;
     updateData.usedBytes = result.usedBytes;
     updateData.datastoresJson = result.datastoresJson;
@@ -150,7 +161,22 @@ export async function pollBackupTargetAndPersist(targetId: number) {
       details: result.pollError || "Backup target capacity could not be retrieved.",
       sourceFingerprint: `backup-target:${targetId}:poll-error`,
     });
-  } else if (result.totalBytes && result.usedBytes) {
+  } else {
+    if (result.pollStatus === "WARN") {
+      await upsertOperationalIncident({
+        sourceType: "MONITOR",
+        sourceId: targetId,
+        severity: "WARN",
+        title: `${target.name} capacity poll is partial`,
+        details: result.pollError || "One or more backup target datastore checks failed.",
+        sourceFingerprint: `backup-target:${targetId}:poll-warning`,
+      });
+    } else {
+      await resolveOperationalIncidents("MONITOR", targetId, `backup-target:${targetId}:poll-warning`);
+    }
+  }
+
+  if (result.pollStatus !== "ERROR" && result.totalBytes && result.usedBytes) {
     const usagePercent = capacityPercent(result.usedBytes, result.totalBytes);
     if (usagePercent >= 90) {
       await upsertOperationalIncident({
@@ -162,7 +188,7 @@ export async function pollBackupTargetAndPersist(targetId: number) {
         sourceFingerprint: `backup-target:${targetId}:capacity`,
       });
     } else {
-      await resolveOperationalIncidents("MONITOR", targetId, `backup-target:${targetId}:`);
+      await resolveOperationalIncidents("MONITOR", targetId, `backup-target:${targetId}:capacity`);
     }
   }
 
@@ -264,6 +290,16 @@ function summarizeHealthDetails(result: Awaited<ReturnType<typeof collectProxmox
   return parts.length > 0 ? parts.join("; ") : `Overall status: ${result.overall_status}`;
 }
 
+function classifyProxmoxCheckResult(
+  result: Pick<Awaited<ReturnType<typeof collectProxmoxHealth>>, "monitoring_error" | "overall_status">,
+) {
+  const failed = result.monitoring_error !== null;
+  return {
+    failed,
+    incompleteHealthData: !failed && result.overall_status === "UNKNOWN",
+  };
+}
+
 export async function listEnabledBackupTargetIds(): Promise<number[]> {
   const rows = await db
     .select({ id: backupTargets.id })
@@ -271,3 +307,7 @@ export async function listEnabledBackupTargetIds(): Promise<number[]> {
     .where(eq(backupTargets.enabled, true));
   return rows.map((row) => row.id);
 }
+
+export const monitoringInternals = {
+  classifyProxmoxCheckResult,
+};

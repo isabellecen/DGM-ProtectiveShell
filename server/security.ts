@@ -62,6 +62,18 @@ function createRateLimit({ windowMs, max, keyPrefix }: RateLimitOptions) {
   };
 }
 
+function positiveIntegerFromValue(value: string | undefined, fallback: number): number {
+  if (value == null || value.trim() === "") {
+    return fallback;
+  }
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function loginRateLimitMax(): number {
+  return positiveIntegerFromValue(process.env.LOGIN_RATE_LIMIT_MAX, 8);
+}
+
 export function enforceInsecureTargetPolicy() {
   if (process.env.NODE_ENV !== "production") {
     return;
@@ -150,7 +162,7 @@ export function registerSecurity(app: Express) {
     "/api/auth/login",
     createRateLimit({
       keyPrefix: "login",
-      max: Number(process.env.LOGIN_RATE_LIMIT_MAX || 8),
+      max: loginRateLimitMax(),
       windowMs: 15 * 60 * 1000,
     }),
   );
@@ -159,4 +171,5 @@ export function registerSecurity(app: Express) {
 export const securityInternals = {
   shouldSendHsts,
   productionContentSecurityPolicy,
+  loginRateLimitMax,
 };

@@ -1,12 +1,13 @@
 import net from "node:net";
 import tls from "node:tls";
 import crypto from "node:crypto";
-import { and, desc, eq, gte, lte } from "drizzle-orm";
+import { and, desc, eq, gte, lte, sql } from "drizzle-orm";
 import { simpleParser } from "mailparser";
 import { db } from "./db";
 import { storage } from "./storage";
 import {
   emails,
+  emailIngestionFailures,
   events,
   expectedRuns,
   imapCheckpoints,
@@ -88,18 +89,50 @@ async function pollConfiguredMailbox(settings: ImapSettings) {
       settings.fetchLimit,
     );
 
-    let maxUid = checkpoint.lastSeenUid;
-    for (const uid of uids) {
-      const raw = await client.fetchMessage(uid);
-      const parsed = await parseEmailSource(raw);
-      await persistParsedEmail(mailboxKey, selected.uidvalidity, uid, parsed);
-      maxUid = Math.max(maxUid, uid);
-    }
-
+    const maxUid = await processMailboxUids({
+      uids,
+      lastSeenUid: checkpoint.lastSeenUid,
+      fetchMessage: (uid) => client.fetchMessage(uid),
+      handleMessage: async (uid, raw) => {
+        const parsed = await parseEmailSource(raw);
+        await persistParsedEmail(mailboxKey, selected.uidvalidity, uid, parsed);
+        await clearIngestionFailure(mailboxKey, selected.uidvalidity, uid);
+      },
+      recordFailure: (uid, err, raw) => recordIngestionFailure(mailboxKey, selected.uidvalidity, uid, err, raw),
+      checkpoint: (uid) => upsertCheckpoint(mailboxKey, selected.uidvalidity, uid),
+    });
     await upsertCheckpoint(mailboxKey, selected.uidvalidity, maxUid);
   } finally {
     await client.logout().catch(() => undefined);
   }
+}
+
+async function processMailboxUids(input: {
+  uids: number[];
+  lastSeenUid: number;
+  fetchMessage: (uid: number) => Promise<string>;
+  handleMessage: (uid: number, raw: string) => Promise<void>;
+  recordFailure: (uid: number, err: unknown, raw?: string) => Promise<void>;
+  checkpoint: (lastSeenUid: number) => Promise<void>;
+}): Promise<number> {
+  let maxUid = input.lastSeenUid;
+  for (const uid of input.uids) {
+    let raw: string | undefined;
+    try {
+      raw = await input.fetchMessage(uid);
+      await input.handleMessage(uid, raw);
+      maxUid = Math.max(maxUid, uid);
+      await input.checkpoint(maxUid);
+    } catch (err) {
+      if (isConnectionLevelImapError(err)) {
+        throw err;
+      }
+      await input.recordFailure(uid, err, raw);
+      maxUid = Math.max(maxUid, uid);
+      await input.checkpoint(maxUid);
+    }
+  }
+  return maxUid;
 }
 
 export function selectUidsForPoll(
@@ -233,6 +266,63 @@ async function persistParsedEmail(
       snippet: parsed.snippet,
     });
   });
+}
+
+function isConnectionLevelImapError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /IMAP_TIMEOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|socket is not connected/i.test(message);
+}
+
+function ingestionFailureMessage(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  return message.slice(0, 1000) || "Unknown IMAP ingestion error";
+}
+
+async function recordIngestionFailure(
+  mailboxKey: string,
+  uidvalidity: number,
+  uid: number,
+  err: unknown,
+  raw?: string,
+) {
+  const now = new Date();
+  await db
+    .insert(emailIngestionFailures)
+    .values({
+      mailboxKey,
+      uidvalidity,
+      uid,
+      errorMessage: ingestionFailureMessage(err),
+      rawExcerpt: raw?.slice(0, 4000) ?? null,
+      attemptCount: 1,
+      firstSeenAt: now,
+      lastSeenAt: now,
+    })
+    .onConflictDoUpdate({
+      target: [
+        emailIngestionFailures.mailboxKey,
+        emailIngestionFailures.uidvalidity,
+        emailIngestionFailures.uid,
+      ],
+      set: {
+        errorMessage: ingestionFailureMessage(err),
+        rawExcerpt: raw?.slice(0, 4000) ?? null,
+        attemptCount: sql`${emailIngestionFailures.attemptCount} + 1`,
+        lastSeenAt: now,
+      },
+    });
+}
+
+async function clearIngestionFailure(mailboxKey: string, uidvalidity: number, uid: number) {
+  await db
+    .delete(emailIngestionFailures)
+    .where(
+      and(
+        eq(emailIngestionFailures.mailboxKey, mailboxKey),
+        eq(emailIngestionFailures.uidvalidity, uidvalidity),
+        eq(emailIngestionFailures.uid, uid),
+      ),
+    );
 }
 
 async function findMatchingRule(parsed: ParsedEmail, client: Pick<typeof db, "select"> = db) {
@@ -478,6 +568,8 @@ export async function parseEmailSource(raw: string): Promise<ParsedEmail> {
 export const emailPollerInternals = {
   checkpointLastSeenUid,
   mailboxStorageKey,
+  isConnectionLevelImapError,
+  processMailboxUids,
 };
 
 function formatAddress(address: { name?: string; address?: string } | undefined): string | null {

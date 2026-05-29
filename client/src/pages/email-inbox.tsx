@@ -26,6 +26,7 @@ import {
   MailWarning,
   MailCheck,
   Plus,
+  AlertTriangle,
   ArrowRight,
   Link as LinkIcon,
   Clock,
@@ -35,11 +36,27 @@ import {
 import { useState } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import type { Email, Job, Customer } from "@shared/schema";
+import type { Email, EmailIngestionFailure, Job, Customer } from "@shared/schema";
 import { buildEmailJobPayload, buildEmailLinkPayload, buildJobPayload } from "@/lib/workflow-payloads";
 
 interface EmailWithJob extends Email {
   jobName?: string;
+}
+
+type PaginatedResponse<T> = {
+  items: T[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+async function fetchJson<T>(url: string): Promise<T> {
+  const res = await fetch(url, { credentials: "include" });
+  if (!res.ok) {
+    const text = (await res.text()) || res.statusText;
+    throw new Error(`${res.status}: ${text}`);
+  }
+  return res.json();
 }
 
 const weekDays = [
@@ -507,14 +524,28 @@ export default function EmailInbox() {
   const [detailOpen, setDetailOpen] = useState(false);
   const [createJobOpen, setCreateJobOpen] = useState(false);
   const [linkJobOpen, setLinkJobOpen] = useState(false);
+  const [unmatchedLimit, setUnmatchedLimit] = useState(100);
+  const [failureLimit, setFailureLimit] = useState(100);
 
-  const { data: unmatchedEmails, isLoading: unmatchedLoading } = useQuery<Email[]>({
-    queryKey: ["/api/emails/unmatched"],
+  const { data: unmatchedPage, isLoading: unmatchedLoading } = useQuery<PaginatedResponse<Email>>({
+    queryKey: ["/api/emails/unmatched", { limit: unmatchedLimit }],
+    queryFn: () => fetchJson(`/api/emails/unmatched?limit=${unmatchedLimit}&offset=0`),
+    refetchInterval: 60_000,
+  });
+
+  const { data: unmatchedCountData } = useQuery<{ count: number }>({
+    queryKey: ["/api/emails/unmatched-count"],
     refetchInterval: 60_000,
   });
 
   const { data: matchedEmails, isLoading: matchedLoading } = useQuery<EmailWithJob[]>({
     queryKey: ["/api/emails/matched"],
+    refetchInterval: 60_000,
+  });
+
+  const { data: failuresPage, isLoading: failuresLoading } = useQuery<PaginatedResponse<EmailIngestionFailure>>({
+    queryKey: ["/api/emails/ingestion-failures", { limit: failureLimit }],
+    queryFn: () => fetchJson(`/api/emails/ingestion-failures?limit=${failureLimit}&offset=0`),
     refetchInterval: 60_000,
   });
 
@@ -543,8 +574,11 @@ export default function EmailInbox() {
     setLinkJobOpen(true);
   };
 
-  const unmatchedCount = unmatchedEmails?.length || 0;
+  const unmatchedEmails = unmatchedPage?.items || [];
+  const ingestionFailures = failuresPage?.items || [];
+  const unmatchedCount = unmatchedCountData?.count ?? unmatchedPage?.total ?? 0;
   const matchedCount = matchedEmails?.length || 0;
+  const failureCount = failuresPage?.total || 0;
 
   return (
     <div className="p-6">
@@ -577,6 +611,14 @@ export default function EmailInbox() {
               </Badge>
             )}
           </TabsTrigger>
+          <TabsTrigger value="failures" data-testid="tab-ingestion-failures">
+            Failures
+            {failureCount > 0 && (
+              <Badge variant="destructive" className="ml-1.5 text-[10px]">
+                {failureCount}
+              </Badge>
+            )}
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="unmatched" className="mt-4">
@@ -588,7 +630,7 @@ export default function EmailInbox() {
                 ))}
               </CardContent>
             </Card>
-          ) : !unmatchedEmails || unmatchedEmails.length === 0 ? (
+          ) : unmatchedEmails.length === 0 ? (
             <Card>
               <CardContent className="flex flex-col items-center justify-center py-16 text-center">
                 <MailCheck className="h-12 w-12 text-muted-foreground mb-3" />
@@ -611,6 +653,18 @@ export default function EmailInbox() {
                     />
                   ))}
                 </div>
+                {unmatchedPage && unmatchedEmails.length < unmatchedPage.total && (
+                  <div className="border-t p-3">
+                    <Button
+                      variant="outline"
+                      className="w-full"
+                      onClick={() => setUnmatchedLimit((current) => current + 100)}
+                      data-testid="button-load-more-unmatched"
+                    >
+                      Load more
+                    </Button>
+                  </div>
+                )}
               </CardContent>
             </Card>
           )}
@@ -649,6 +703,77 @@ export default function EmailInbox() {
                     />
                   ))}
                 </div>
+              </CardContent>
+            </Card>
+          )}
+        </TabsContent>
+
+        <TabsContent value="failures" className="mt-4">
+          {failuresLoading ? (
+            <Card>
+              <CardContent className="p-4">
+                {[...Array(3)].map((_, i) => (
+                  <Skeleton key={i} className="h-20 w-full mb-2" />
+                ))}
+              </CardContent>
+            </Card>
+          ) : ingestionFailures.length === 0 ? (
+            <Card>
+              <CardContent className="flex flex-col items-center justify-center py-16 text-center">
+                <MailCheck className="h-12 w-12 text-muted-foreground mb-3" />
+                <h3 className="text-lg font-semibold mb-1">No ingestion failures</h3>
+                <p className="text-sm text-muted-foreground max-w-sm">
+                  IMAP messages that cannot be fetched or parsed will appear here.
+                </p>
+              </CardContent>
+            </Card>
+          ) : (
+            <Card>
+              <CardContent className="p-2">
+                <div className="divide-y">
+                  {ingestionFailures.map((failure) => (
+                    <div
+                      key={failure.id}
+                      className="flex items-start gap-3 p-3 rounded-md"
+                      data-testid={`row-ingestion-failure-${failure.id}`}
+                    >
+                      <AlertTriangle className="h-5 w-5 text-destructive mt-0.5 shrink-0" />
+                      <div className="flex-1 min-w-0 space-y-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p className="text-sm font-medium">
+                            UID {failure.uid} in {failure.mailboxKey}
+                          </p>
+                          <Badge variant="outline" className="text-[10px]">
+                            {failure.attemptCount} attempt{failure.attemptCount === 1 ? "" : "s"}
+                          </Badge>
+                        </div>
+                        <p className="text-sm text-destructive" data-testid={`text-ingestion-error-${failure.id}`}>
+                          {failure.errorMessage}
+                        </p>
+                        {failure.rawExcerpt && (
+                          <p className="text-xs text-muted-foreground line-clamp-2">
+                            {failure.rawExcerpt}
+                          </p>
+                        )}
+                      </div>
+                      <div className="shrink-0 text-xs text-muted-foreground whitespace-nowrap">
+                        {new Date(failure.lastSeenAt).toLocaleString()}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                {failuresPage && ingestionFailures.length < failuresPage.total && (
+                  <div className="border-t p-3">
+                    <Button
+                      variant="outline"
+                      className="w-full"
+                      onClick={() => setFailureLimit((current) => current + 100)}
+                      data-testid="button-load-more-ingestion-failures"
+                    >
+                      Load more
+                    </Button>
+                  </div>
+                )}
               </CardContent>
             </Card>
           )}

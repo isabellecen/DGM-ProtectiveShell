@@ -6,6 +6,7 @@ import {
   jobRules, type JobRule, type InsertJobRule,
   expectedRuns, type ExpectedRun, type InsertExpectedRun,
   emails, type Email, type InsertEmail,
+  emailIngestionFailures, type EmailIngestionFailure,
   events, type Event, type InsertEvent,
   incidents, type Incident, type InsertIncident,
   recipients, type Recipient, type InsertRecipient,
@@ -25,6 +26,12 @@ import { backupEmailIncidentFingerprint, syncBackupEmailIncident } from "./backu
 
 type WithCustomerName = { customerName?: string | null };
 type WithJobName = { jobName?: string | null };
+export type PaginatedResult<T> = {
+  items: T[];
+  total: number;
+  limit: number;
+  offset: number;
+};
 
 export interface IStorage {
   getCustomers(): Promise<Customer[]>;
@@ -73,11 +80,12 @@ export interface IStorage {
   deleteJobRule(id: number): Promise<void>;
 
   getEmails(limit?: number): Promise<Email[]>;
-  getUnmatchedEmails(): Promise<Email[]>;
+  getUnmatchedEmails(limit?: number, offset?: number): Promise<PaginatedResult<Email>>;
   getMatchedEmails(limit?: number): Promise<(Email & WithJobName)[]>;
   getEmail(id: number): Promise<Email | undefined>;
   linkEmailToJob(emailId: number, jobId: number): Promise<Email | undefined>;
   getUnmatchedEmailCount(): Promise<number>;
+  getEmailIngestionFailures(limit?: number, offset?: number): Promise<PaginatedResult<EmailIngestionFailure>>;
   getEvents(limit?: number): Promise<(Event & WithJobName)[]>;
 
   getProxmoxChecks(hostId: number, limit?: number): Promise<ProxmoxCheck[]>;
@@ -614,16 +622,22 @@ export class DatabaseStorage implements IStorage {
   async upsertSetting(key: string, value: string): Promise<AppSetting> {
     const [existing] = await db.select().from(appSettings).where(eq(appSettings.key, key));
     const secretValue = isSecretSettingKey(key);
-    const clearSecret = secretValue && value === CLEAR_SECRET_SETTING_VALUE;
-    const storedValue = clearSecret ? "" : secretValue ? encryptSecret(value) || "" : value;
 
-    if (existing) {
-      if (secretValue && value === "") {
+    if (secretValue && value === "") {
+      if (existing) {
         return {
           ...existing,
           value: "",
         };
       }
+      const [result] = await db.insert(appSettings).values({ key, value: "" }).returning();
+      return { ...result, value: "" };
+    }
+
+    const clearSecret = secretValue && value === CLEAR_SECRET_SETTING_VALUE;
+    const storedValue = clearSecret ? "" : secretValue ? encryptSecret(value) || "" : value;
+
+    if (existing) {
       const [result] = await db
         .update(appSettings)
         .set({ value: storedValue, updatedAt: new Date() })
@@ -673,8 +687,27 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(emails).orderBy(desc(emails.receivedAt)).limit(limit);
   }
 
-  async getUnmatchedEmails(): Promise<Email[]> {
-    return db.select().from(emails).where(sql`${emails.matchedJobId} IS NULL`).orderBy(desc(emails.receivedAt));
+  async getUnmatchedEmails(limit = 100, offset = 0): Promise<PaginatedResult<Email>> {
+    const whereUnmatched = sql`${emails.matchedJobId} IS NULL`;
+    const [items, totalResult] = await Promise.all([
+      db
+        .select()
+        .from(emails)
+        .where(whereUnmatched)
+        .orderBy(desc(emails.receivedAt))
+        .limit(limit)
+        .offset(offset),
+      db
+        .select({ count: count() })
+        .from(emails)
+        .where(whereUnmatched),
+    ]);
+    return {
+      items,
+      total: totalResult?.[0]?.count || 0,
+      limit,
+      offset,
+    };
   }
 
   async getMatchedEmails(limit = 50): Promise<(Email & WithJobName)[]> {
@@ -718,6 +751,24 @@ export class DatabaseStorage implements IStorage {
       .from(emails)
       .where(sql`${emails.matchedJobId} IS NULL`);
     return result?.count || 0;
+  }
+
+  async getEmailIngestionFailures(limit = 100, offset = 0): Promise<PaginatedResult<EmailIngestionFailure>> {
+    const [items, totalResult] = await Promise.all([
+      db
+        .select()
+        .from(emailIngestionFailures)
+        .orderBy(desc(emailIngestionFailures.lastSeenAt))
+        .limit(limit)
+        .offset(offset),
+      db.select({ count: count() }).from(emailIngestionFailures),
+    ]);
+    return {
+      items,
+      total: totalResult?.[0]?.count || 0,
+      limit,
+      offset,
+    };
   }
 
   async getEvents(limit = 50): Promise<(Event & WithJobName)[]> {
