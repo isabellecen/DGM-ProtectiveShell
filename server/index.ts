@@ -92,7 +92,7 @@ app.use((req, res, next) => {
   const schedulerEnabled =
     databaseReady && process.env.NODE_ENV !== "test" && process.env.DISABLE_SCHEDULER !== "1";
 
-  if (databaseReady && (process.env.SEED_ON_BOOT === "1" || process.env.NODE_ENV !== "production")) {
+  if (databaseReady && process.env.SEED_ON_BOOT === "1") {
     await seedDatabase().catch((err) => {
       console.error("Seed error (non-fatal):", err.message);
     });
