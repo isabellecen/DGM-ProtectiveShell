@@ -26,6 +26,10 @@ import { backupEmailIncidentFingerprint, syncBackupEmailIncident } from "./backu
 
 type WithCustomerName = { customerName?: string | null };
 type WithJobName = { jobName?: string | null };
+type WithJobObservation = {
+  latestRunStatus?: string | null;
+  latestEventStatus?: string | null;
+};
 export type PaginatedResult<T> = {
   items: T[];
   total: number;
@@ -40,7 +44,7 @@ export interface IStorage {
   updateCustomer(id: number, data: Partial<InsertCustomer>): Promise<Customer | undefined>;
   deleteCustomer(id: number): Promise<void>;
 
-  getJobs(): Promise<(Job & WithCustomerName)[]>;
+  getJobs(): Promise<(Job & WithCustomerName & WithJobObservation)[]>;
   getJob(id: number): Promise<Job | undefined>;
   createJob(data: InsertJob): Promise<Job>;
   createJobFromEmail(
@@ -369,7 +373,7 @@ export class DatabaseStorage implements IStorage {
     });
   }
 
-  async getJobs(): Promise<(Job & WithCustomerName)[]> {
+  async getJobs(): Promise<(Job & WithCustomerName & WithJobObservation)[]> {
     const result = await db
       .select({
         id: jobs.id,
@@ -385,6 +389,20 @@ export class DatabaseStorage implements IStorage {
         enabled: jobs.enabled,
         createdAt: jobs.createdAt,
         customerName: customers.name,
+        latestRunStatus: sql<string | null>`(
+          SELECT ${expectedRuns.status}
+          FROM ${expectedRuns}
+          WHERE ${expectedRuns.jobId} = ${jobs.id}
+          ORDER BY ${expectedRuns.scheduledFor} DESC
+          LIMIT 1
+        )`.as("latest_run_status"),
+        latestEventStatus: sql<string | null>`(
+          SELECT ${events.status}
+          FROM ${events}
+          WHERE ${events.jobId} = ${jobs.id}
+          ORDER BY ${events.receivedAt} DESC
+          LIMIT 1
+        )`.as("latest_event_status"),
       })
       .from(jobs)
       .leftJoin(customers, eq(jobs.customerId, customers.id));

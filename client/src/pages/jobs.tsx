@@ -36,9 +36,13 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Job, Customer } from "@shared/schema";
 import { ConfirmActionButton } from "@/components/confirm-action";
 import { buildJobPayload } from "@/lib/workflow-payloads";
+import { jobDisplayStatus, jobStatusDetail, systemTypeLabel } from "@/lib/job-display";
+import { Badge } from "@/components/ui/badge";
 
 interface JobWithCustomer extends Job {
   customerName?: string;
+  latestRunStatus?: string | null;
+  latestEventStatus?: string | null;
 }
 
 const weekDays = [
@@ -50,6 +54,24 @@ const weekDays = [
   ["friday", "Fri"],
   ["saturday", "Sat"],
 ] as const;
+
+const systemTypeClasses: Record<string, string> = {
+  VEEAM: "bg-sky-500/15 text-sky-700 dark:text-sky-400",
+  PBS: "bg-indigo-500/15 text-indigo-700 dark:text-indigo-400",
+  SYNOLOGY: "bg-violet-500/15 text-violet-700 dark:text-violet-400",
+};
+
+function SystemBadge({ systemType }: { systemType: string }) {
+  return (
+    <Badge
+      variant="outline"
+      className={`no-default-hover-elevate no-default-active-elevate border-transparent font-medium ${systemTypeClasses[systemType] || "bg-slate-500/15 text-slate-600 dark:text-slate-400"}`}
+      data-testid={`badge-system-${systemType.toLowerCase()}`}
+    >
+      {systemTypeLabel(systemType)}
+    </Badge>
+  );
+}
 
 function JobFormDialog({
   job,
@@ -353,7 +375,7 @@ export default function Jobs() {
                   <TableRow key={job.id} data-testid={`row-job-${job.id}`}>
                     <TableCell className="font-medium">{job.name}</TableCell>
                     <TableCell>
-                      <StatusBadge status={job.systemType} />
+                      <SystemBadge systemType={job.systemType} />
                     </TableCell>
                     <TableCell className="text-muted-foreground">
                       {job.customerName || "-"}
@@ -362,7 +384,12 @@ export default function Jobs() {
                       {job.scheduleType} @ {job.scheduleTime}
                     </TableCell>
                     <TableCell>
-                      <StatusBadge status={job.enabled ? "OK" : "UNKNOWN"} />
+                      <div className="space-y-1">
+                        <StatusBadge status={jobDisplayStatus(job)} />
+                        <div className="text-xs text-muted-foreground">
+                          {jobStatusDetail(job)}
+                        </div>
+                      </div>
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1">
