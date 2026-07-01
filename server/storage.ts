@@ -170,6 +170,15 @@ type BackupTargetUpdate = Partial<InsertBackupTarget> & {
 const prunedRecipient = Symbol("prunedRecipient");
 
 type WebhookJobCandidate = Pick<Job, "id" | "webhookHost">;
+type WebhookScheduleJob = Pick<
+  Job,
+  "scheduleTime" | "scheduleType" | "daysOfWeek" | "windowHours" | "longRunning" | "longWindowHours"
+>;
+
+type WebhookRunWindow = {
+  scheduledFor: Date;
+  deadlineAt: Date;
+};
 
 function normalizedOptional(value: string | null | undefined): string | null {
   const trimmed = value?.trim().toLowerCase();
@@ -214,6 +223,128 @@ function selectWebhookJobMatch<T extends WebhookJobCandidate>(
   }
 
   return { status: "ignored", reason: "webhook host is required for host-scoped job mapping" };
+}
+
+function normalizeTimezoneValue(timezone: string | null | undefined): string {
+  const configured = timezone?.trim() || "UTC";
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: configured }).format(new Date());
+    return configured;
+  } catch {
+    return "UTC";
+  }
+}
+
+type ZonedParts = {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+};
+
+function toZonedParts(date: Date, timezone: string): ZonedParts {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+
+  const value = (type: string) => Number(parts.find((part) => part.type === type)?.value);
+  return {
+    year: value("year"),
+    month: value("month"),
+    day: value("day"),
+    hour: value("hour"),
+    minute: value("minute"),
+  };
+}
+
+function addLocalDays(parts: ZonedParts, days: number): ZonedParts {
+  const date = new Date(Date.UTC(parts.year, parts.month - 1, parts.day + days, 12, 0, 0, 0));
+  return {
+    year: date.getUTCFullYear(),
+    month: date.getUTCMonth() + 1,
+    day: date.getUTCDate(),
+    hour: parts.hour,
+    minute: parts.minute,
+  };
+}
+
+function zonedWallTimeToUtc(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  timezone: string,
+): Date {
+  const guess = new Date(Date.UTC(year, month - 1, day, hour, minute, 0, 0));
+  const actual = toZonedParts(guess, timezone);
+  const wantedUtc = Date.UTC(year, month - 1, day, hour, minute, 0, 0);
+  const actualUtc = Date.UTC(actual.year, actual.month - 1, actual.day, actual.hour, actual.minute, 0, 0);
+  return new Date(guess.getTime() + (wantedUtc - actualUtc));
+}
+
+function weekdayName(date: Date, timezone: string): string {
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    weekday: "long",
+  }).format(date).toLowerCase();
+}
+
+function webhookRunWindowForEvent(
+  job: WebhookScheduleJob,
+  eventAt: Date,
+  timezone: string,
+): WebhookRunWindow | null {
+  const [hoursRaw, minutesRaw] = job.scheduleTime.split(":");
+  const hours = Number(hoursRaw);
+  const minutes = Number(minutesRaw);
+  if (
+    !Number.isInteger(hours) ||
+    !Number.isInteger(minutes) ||
+    hours < 0 ||
+    hours > 23 ||
+    minutes < 0 ||
+    minutes > 59
+  ) {
+    return null;
+  }
+
+  const windowHours = job.longRunning ? job.longWindowHours || job.windowHours : job.windowHours;
+  const catchupDays = Math.max(1, Math.ceil(windowHours / 24));
+  const eventParts = toZonedParts(eventAt, timezone);
+
+  for (let offset = 0; offset >= -catchupDays; offset -= 1) {
+    const localDate = addLocalDays(eventParts, offset);
+    const scheduledFor = zonedWallTimeToUtc(
+      localDate.year,
+      localDate.month,
+      localDate.day,
+      hours,
+      minutes,
+      timezone,
+    );
+
+    if (job.scheduleType === "weekly") {
+      const dayName = weekdayName(scheduledFor, timezone);
+      if (!job.daysOfWeek?.map((day) => day.toLowerCase()).includes(dayName)) {
+        continue;
+      }
+    }
+
+    const deadlineAt = new Date(scheduledFor.getTime() + windowHours * 60 * 60 * 1000);
+    if (scheduledFor <= eventAt && deadlineAt >= eventAt) {
+      return { scheduledFor, deadlineAt };
+    }
+  }
+
+  return null;
 }
 
 function pruneRecipientFromRoutePayload(value: unknown, recipientId: number): unknown | typeof prunedRecipient {
@@ -874,6 +1005,10 @@ export class DatabaseStorage implements IStorage {
   }
 
   async ingestProxmoxWebhookEvent(input: NormalizedProxmoxWebhookEvent): Promise<ProxmoxWebhookIngestResult> {
+    const timezone = normalizeTimezoneValue(
+      (await this.getSettingValue("APP_TIMEZONE")) || process.env.APP_TIMEZONE,
+    );
+
     return db.transaction(async (tx) => {
       const [existingEvent] = await tx
         .select()
@@ -929,6 +1064,49 @@ export class DatabaseStorage implements IStorage {
           )
           .orderBy(desc(expectedRuns.scheduledFor))
           .limit(1);
+      }
+
+      if (!run) {
+        for (const eventAt of [input.receivedAt, new Date()]) {
+          const window = webhookRunWindowForEvent(job, eventAt, timezone);
+          if (!window) {
+            continue;
+          }
+
+          const [insertedRun] = await tx
+            .insert(expectedRuns)
+            .values({
+              jobId: job.id,
+              scheduledFor: window.scheduledFor,
+              deadlineAt: window.deadlineAt,
+              status: "PENDING",
+            })
+            .onConflictDoNothing({
+              target: [expectedRuns.jobId, expectedRuns.scheduledFor],
+            })
+            .returning();
+
+          if (insertedRun) {
+            run = insertedRun;
+            break;
+          }
+
+          const [existingRun] = await tx
+            .select()
+            .from(expectedRuns)
+            .where(
+              and(
+                eq(expectedRuns.jobId, job.id),
+                eq(expectedRuns.scheduledFor, window.scheduledFor),
+                inArray(expectedRuns.status, ["PENDING", "MISSING", "FAIL", "WARN"]),
+              ),
+            )
+            .limit(1);
+          if (existingRun) {
+            run = existingRun;
+            break;
+          }
+        }
       }
 
       const [insertedEvent] = await tx
@@ -1236,4 +1414,5 @@ export const storageInternals = {
   routePayloadHasRecipients,
   shouldPruneRecipientRoutesForUpdate,
   selectWebhookJobMatch,
+  webhookRunWindowForEvent,
 };

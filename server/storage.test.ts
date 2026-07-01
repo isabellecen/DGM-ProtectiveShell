@@ -91,3 +91,41 @@ test("webhook job matching rejects ambiguous source and job-id mappings", () => 
     "ignored",
   );
 });
+
+test("webhook run window matches daily schedule around incoming event", () => {
+  const window = storageInternals.webhookRunWindowForEvent(
+    {
+      scheduleType: "daily",
+      scheduleTime: "11:00",
+      daysOfWeek: [],
+      windowHours: 6,
+      longRunning: false,
+      longWindowHours: 24,
+    },
+    new Date("2026-07-01T18:41:30.000Z"),
+    "America/Phoenix",
+  );
+
+  assert(window);
+  assert.equal(window.scheduledFor.toISOString(), "2026-07-01T18:00:00.000Z");
+  assert.equal(window.deadlineAt.toISOString(), "2026-07-02T00:00:00.000Z");
+});
+
+test("webhook run window supports long jobs crossing local days", () => {
+  const window = storageInternals.webhookRunWindowForEvent(
+    {
+      scheduleType: "daily",
+      scheduleTime: "23:00",
+      daysOfWeek: [],
+      windowHours: 6,
+      longRunning: false,
+      longWindowHours: 24,
+    },
+    new Date("2026-07-02T07:30:00.000Z"),
+    "America/Phoenix",
+  );
+
+  assert(window);
+  assert.equal(window.scheduledFor.toISOString(), "2026-07-02T06:00:00.000Z");
+  assert.equal(window.deadlineAt.toISOString(), "2026-07-02T12:00:00.000Z");
+});
