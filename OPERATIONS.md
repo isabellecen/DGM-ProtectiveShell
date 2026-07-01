@@ -365,7 +365,8 @@ The Settings page writes to the `app_settings` table. Secret values are encrypte
 | `RETENTION_DAYS` | Yes | Retention worker deletes old emails, events, expected runs, Proxmox checks, and non-open incidents after this many days. Defaults to `90`. |
 | `SSH_TIMEOUT` | Yes | SSH collector timeout in seconds. Defaults to `20`. |
 | `DAILY_REPORT_TIME` | Yes | Sends a daily operational summary at this local `HH:MM` time when SMTP and recipients are configured. |
-| `PROXMOX_WEBHOOK_SECRET` | Yes | Shared secret for PVE/PBS notification webhook ingestion. Encrypted when stored in Settings; environment value is used as a fallback. |
+| `BACKUP_WEBHOOK_SECRET` | Yes | Preferred shared secret for PVE/PBS/DSM notification webhook ingestion. Encrypted when stored in Settings; environment value is used as a fallback. |
+| `PROXMOX_WEBHOOK_SECRET` | Yes | Legacy shared secret for existing PVE/PBS webhook configurations. Used only when `BACKUP_WEBHOOK_SECRET` is not configured. |
 
 ## Admin Authentication
 
@@ -433,24 +434,24 @@ Jobs live under **Backup Jobs**.
 | Window hours | Deadline window after scheduled time. If no matching event arrives before the deadline, the expected run becomes missing. |
 | Long-running job | Enables a separate long-running deadline window. |
 | Long window hours | Deadline window for long-running jobs. |
-| Proxmox webhook source | Optional `PVE` or `PBS` source for direct Proxmox notification ingest. |
-| Proxmox webhook job ID | Proxmox notification `fields.job-id` value to map to this job. Required when a webhook source is selected. |
-| Proxmox webhook host | Optional Proxmox notification `fields.hostname` value. Use this when multiple hosts can emit the same job ID. |
+| Backup webhook source | Optional `PVE`, `PBS`, or `DSM` source for direct notification ingest. |
+| Backup webhook job ID | Proxmox notification `fields.job-id`, or Synology Hyper Backup task name for DSM. Required when a webhook source is selected. |
+| Backup webhook host | Optional Proxmox `fields.hostname` or DSM NAS host. Use this when multiple hosts can emit the same job ID/task name. |
 | Enabled | Disabled jobs do not produce expected runs. |
 
 Expected runs are deduplicated by `(jobId, scheduledFor)`.
 
-## Proxmox Webhook Ingestion
+## Backup Webhook Ingestion
 
-PVE and PBS notification webhooks can update Backup Job status without IMAP. Configure `PROXMOX_WEBHOOK_SECRET` in Settings, then point Proxmox webhook targets at:
+PVE, PBS, and Synology DSM notification webhooks can update Backup Job status without IMAP. Configure `BACKUP_WEBHOOK_SECRET` in Settings, then point webhook targets at:
 
 ```text
-POST /api/integrations/proxmox/notifications
+POST /api/integrations/backup/notifications
 Content-Type: application/json
 X-SecureShell-Webhook-Secret: <secret>
 ```
 
-`Authorization: Bearer <secret>` is also accepted, as are `X-ProtectiveShell-Webhook-Secret` and `X-Webhook-Secret`.
+The legacy `POST /api/integrations/proxmox/notifications` endpoint remains available for existing Proxmox targets. `Authorization: Bearer <secret>` is also accepted, as are `X-ProtectiveShell-Webhook-Secret` and `X-Webhook-Secret`.
 
 Send JSON containing `source`, `severity`, `timestamp`, `title`, `message`, and `fields`. Use `source: "PVE"` for PVE `vzdump` events and `source: "PBS"` for PBS `sync`, `prune`, `verification`, or `tape-backup` events.
 
@@ -467,6 +468,16 @@ Use Proxmox JSON template rendering for dynamic values so multiline backup messa
 }
 ```
 
+For DSM Custom Webhook, use `source: "DSM"` and pass the rendered DSM notification text. The webhook parser accepts `SYNOLOGY` as an alias for `DSM` and uses the Hyper Backup task name as the job mapping value:
+
+```json
+{
+  "source": "DSM",
+  "eventType": "hyper-backup",
+  "message": "@@TEXT@@"
+}
+```
+
 Webhook ingestion maps Proxmox severity to backup status:
 
 - `error` -> `FAIL`
@@ -474,7 +485,9 @@ Webhook ingestion maps Proxmox severity to backup status:
 - `info` or `notice` -> `OK`
 - anything else -> `UNKNOWN`
 
-The webhook is matched to a Backup Job by source, `fields.job-id`, and optionally `fields.hostname`. Unmatched or unsupported notifications return `202` with an ignored reason and do not update jobs.
+DSM ingestion maps explicit `status`/`result` values first, then Hyper Backup notification text. Completed/successful text resolves to `OK`, warning text resolves to `WARN`, and failed/error/canceled text resolves to `FAIL`.
+
+The webhook is matched to a Backup Job by source, job ID/task name, and optionally host. Unmatched or unsupported notifications return `202` with an ignored reason and do not update jobs.
 
 ## Job Rules And Email Matching
 

@@ -102,6 +102,9 @@ function JobFormDialog({
   const [webhookSource, setWebhookSource] = useState(job?.webhookSource || "none");
   const [webhookJobId, setWebhookJobId] = useState(job?.webhookJobId || "");
   const [webhookHost, setWebhookHost] = useState(job?.webhookHost || "");
+  const webhookJobLabel = webhookSource === "DSM" ? "Hyper Backup task name" : "Job ID";
+  const webhookJobPlaceholder = webhookSource === "DSM" ? "CloudStation Backup" : "backup-123";
+  const webhookHostPlaceholder = webhookSource === "DSM" ? "nas1" : "pve1";
 
   const mutation = useMutation({
     mutationFn: async () => {
@@ -264,7 +267,7 @@ function JobFormDialog({
           )}
           <div className="space-y-3 rounded-md border p-3">
             <div>
-              <Label>Proxmox Webhook</Label>
+              <Label>Backup Webhook</Label>
               <Select
                 value={webhookSource}
                 onValueChange={(value) => {
@@ -282,18 +285,19 @@ function JobFormDialog({
                   <SelectItem value="none">No webhook</SelectItem>
                   <SelectItem value="PVE">Proxmox VE</SelectItem>
                   <SelectItem value="PBS">Proxmox Backup Server</SelectItem>
+                  <SelectItem value="DSM">Synology DSM</SelectItem>
                 </SelectContent>
               </Select>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <Label htmlFor="webhook-job-id">Job ID</Label>
+                <Label htmlFor="webhook-job-id">{webhookJobLabel}</Label>
                 <Input
                   id="webhook-job-id"
                   value={webhookJobId}
                   onChange={(e) => setWebhookJobId(e.target.value)}
                   disabled={webhookSource === "none"}
-                  placeholder="backup-123"
+                  placeholder={webhookJobPlaceholder}
                   data-testid="input-webhook-job-id"
                 />
               </div>
@@ -304,7 +308,7 @@ function JobFormDialog({
                   value={webhookHost}
                   onChange={(e) => setWebhookHost(e.target.value)}
                   disabled={webhookSource === "none"}
-                  placeholder="pve1"
+                  placeholder={webhookHostPlaceholder}
                   data-testid="input-webhook-host"
                 />
               </div>

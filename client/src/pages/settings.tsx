@@ -588,6 +588,10 @@ export default function Settings() {
     saveMutation.mutate({ key, value });
   };
 
+  const backupWebhookUrl =
+    typeof window === "undefined"
+      ? "/api/integrations/backup/notifications"
+      : `${window.location.origin}/api/integrations/backup/notifications`;
   const proxmoxWebhookUrl =
     typeof window === "undefined"
       ? "/api/integrations/proxmox/notifications"
@@ -599,6 +603,11 @@ export default function Settings() {
   "title": {{ json title }},
   "message": {{ json message }},
   "fields": {{ json fields }}
+}`;
+  const dsmWebhookBodyTemplate = `{
+  "source": "DSM",
+  "eventType": "hyper-backup",
+  "message": "@@TEXT@@"
 }`;
   const pbsWebhookBodyTemplate = `{
   "source": "PBS",
@@ -789,12 +798,22 @@ export default function Settings() {
         <TabsContent value="integrations">
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Proxmox Webhook</CardTitle>
+              <CardTitle className="text-base">Backup Webhooks</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               <SettingField
                 label="Webhook Secret"
-                description="Shared secret accepted by the Proxmox notification webhook endpoint."
+                description="Preferred shared secret accepted by backup webhook endpoints."
+                settingKey="BACKUP_WEBHOOK_SECRET"
+                type="password"
+                clearableSecret
+                secretHasValue={secretState.BACKUP_WEBHOOK_SECRET}
+                settings={settings}
+                onSave={handleSaveSetting}
+              />
+              <SettingField
+                label="Legacy Proxmox Secret"
+                description="Fallback secret for existing Proxmox webhook configurations."
                 settingKey="PROXMOX_WEBHOOK_SECRET"
                 type="password"
                 clearableSecret
@@ -803,7 +822,16 @@ export default function Settings() {
                 onSave={handleSaveSetting}
               />
               <div className="space-y-1.5">
-                <Label>Endpoint URL</Label>
+                <Label>Backup Endpoint URL</Label>
+                <div
+                  className="rounded-md border bg-muted px-3 py-2 font-mono text-xs break-all"
+                  data-testid="text-backup-webhook-url"
+                >
+                  {backupWebhookUrl}
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label>Legacy Proxmox Endpoint URL</Label>
                 <div
                   className="rounded-md border bg-muted px-3 py-2 font-mono text-xs break-all"
                   data-testid="text-proxmox-webhook-url"
@@ -812,7 +840,7 @@ export default function Settings() {
                 </div>
               </div>
               <div className="space-y-1.5">
-                <Label>PVE Headers</Label>
+                <Label>Headers</Label>
                 <pre className="overflow-x-auto rounded-md border bg-muted p-3 text-xs">
                   Content-Type: application/json{"\n"}
                   X-SecureShell-Webhook-Secret: {"<secret>"}
@@ -835,6 +863,12 @@ export default function Settings() {
                   <Label>PBS Body</Label>
                   <pre className="max-h-72 overflow-auto rounded-md border bg-muted p-3 text-xs">
                     {pbsWebhookBodyTemplate}
+                  </pre>
+                </div>
+                <div className="space-y-1.5">
+                  <Label>DSM Body</Label>
+                  <pre className="max-h-72 overflow-auto rounded-md border bg-muted p-3 text-xs">
+                    {dsmWebhookBodyTemplate}
                   </pre>
                 </div>
               </div>

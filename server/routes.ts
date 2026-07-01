@@ -6,18 +6,20 @@ import { testImapConnection } from "./emailPoller";
 import { testSmtpConnection } from "./notificationService";
 import { assertMonitoredTargetAllowed } from "./egress";
 import {
-  parseProxmoxWebhookPayload,
+  parseBackupWebhookPayload,
+  BACKUP_WEBHOOK_PATH,
+  BACKUP_WEBHOOK_SECRET_SETTING,
   PROXMOX_WEBHOOK_PATH,
   PROXMOX_WEBHOOK_SECRET_SETTING,
-  proxmoxWebhookSecretFromHeaders,
-  proxmoxWebhookSecretMatches,
-} from "./proxmoxWebhook";
+  backupWebhookSecretFromHeaders,
+  backupWebhookSecretMatches,
+} from "./backupWebhook";
 import { z } from "zod";
 
 const idParamSchema = z.coerce.number().int().positive();
 const nullableIdSchema = z.union([z.coerce.number().int().positive(), z.null()]);
 const systemTypeSchema = z.enum(["VEEAM", "PBS", "SYNOLOGY"]);
-const webhookSourceSchema = z.enum(["PVE", "PBS"]);
+const webhookSourceSchema = z.enum(["PVE", "PBS", "DSM"]);
 const backupTargetTypeSchema = z.enum(["SYNOLOGY", "PBS"]);
 const scheduleTimeSchema = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
 const dayOfWeekSchema = z.enum([
@@ -50,6 +52,7 @@ const allowedSettingKeys = [
   "RETENTION_DAYS",
   "SSH_TIMEOUT",
   "DAILY_REPORT_TIME",
+  "BACKUP_WEBHOOK_SECRET",
   "PROXMOX_WEBHOOK_SECRET",
 ] as const;
 
@@ -286,10 +289,10 @@ function assertJobPatchScheduleValid(
 }
 
 function normalizeJobCreateData<T extends {
-  webhookSource?: "PVE" | "PBS" | null;
+  webhookSource?: "PVE" | "PBS" | "DSM" | null;
   webhookJobId?: string | null;
   webhookHost?: string | null;
-}>(data: T): T & { webhookSource: "PVE" | "PBS" | null; webhookJobId: string | null; webhookHost: string | null } {
+}>(data: T): T & { webhookSource: "PVE" | "PBS" | "DSM" | null; webhookJobId: string | null; webhookHost: string | null } {
   const webhookSource = data.webhookSource ?? null;
   return {
     ...data,
@@ -300,7 +303,7 @@ function normalizeJobCreateData<T extends {
 }
 
 function normalizeJobPatchData<T extends {
-  webhookSource?: "PVE" | "PBS" | null;
+  webhookSource?: "PVE" | "PBS" | "DSM" | null;
   webhookJobId?: string | null;
   webhookHost?: string | null;
 }>(data: T): T {
@@ -376,18 +379,43 @@ async function assertRecipientsExist(recipientIds: number[]) {
   }
 }
 
-type ProxmoxWebhookStorage =
-  Pick<IStorage, "getSettingValue" | "ingestProxmoxWebhookEvent"> &
-  Partial<Pick<IStorage, "createAuditLog">>;
+type BackupWebhookStorage =
+  Pick<IStorage, "getSettingValue"> &
+  Partial<Pick<IStorage, "ingestBackupWebhookEvent" | "ingestProxmoxWebhookEvent" | "createAuditLog">>;
 
 function webhookBodyField(body: unknown, names: string[]): string | null {
-  const fields = body && typeof body === "object" ? (body as { fields?: unknown }).fields : undefined;
-  if (!fields || typeof fields !== "object" || Array.isArray(fields)) {
+  const record = body && typeof body === "object" && !Array.isArray(body)
+    ? body as Record<string, unknown>
+    : null;
+  if (!record) {
     return null;
   }
 
   for (const name of names) {
-    const value = (fields as Record<string, unknown>)[name];
+    const value = record[name];
+    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value === "number" || typeof value === "boolean") return String(value);
+  }
+
+  const fields = record.fields;
+  let fieldsRecord: Record<string, unknown> | null =
+    fields && typeof fields === "object" && !Array.isArray(fields) ? fields as Record<string, unknown> : null;
+  if (!fieldsRecord && typeof fields === "string" && fields.trim().startsWith("{")) {
+    try {
+      const parsed = JSON.parse(fields);
+      fieldsRecord = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? parsed as Record<string, unknown>
+        : null;
+    } catch {
+      fieldsRecord = null;
+    }
+  }
+  if (!fieldsRecord) {
+    return null;
+  }
+
+  for (const name of names) {
+    const value = fieldsRecord[name];
     if (typeof value === "string" && value.trim()) return value.trim();
     if (typeof value === "number" || typeof value === "boolean") return String(value);
   }
@@ -397,7 +425,9 @@ function webhookBodyField(body: unknown, names: string[]): string | null {
 
 function webhookBodySource(body: unknown): string | null {
   const source = body && typeof body === "object" ? (body as { source?: unknown }).source : undefined;
-  return typeof source === "string" && source.trim() ? source.trim().toUpperCase() : null;
+  if (typeof source !== "string" || !source.trim()) return null;
+  const normalized = source.trim().toUpperCase();
+  return normalized === "SYNOLOGY" ? "DSM" : normalized;
 }
 
 function summarizeWebhookIdentity(input: {
@@ -412,8 +442,8 @@ function summarizeWebhookIdentity(input: {
   ].join(" ");
 }
 
-function auditIgnoredProxmoxWebhook(
-  webhookStorage: ProxmoxWebhookStorage,
+function auditIgnoredBackupWebhook(
+  webhookStorage: BackupWebhookStorage,
   input: {
     reason: string;
     source?: string | null;
@@ -430,8 +460,8 @@ function auditIgnoredProxmoxWebhook(
   void webhookStorage.createAuditLog({
     actor: "system",
     action: "ignore",
-    entityType: "proxmox-webhook",
-    summary: `Ignored Proxmox webhook: ${input.reason} (${identity})`,
+    entityType: "backup-webhook",
+    summary: `Ignored backup webhook: ${input.reason} (${identity})`,
     metadataJson: {
       reason: input.reason,
       source: input.source || null,
@@ -440,12 +470,12 @@ function auditIgnoredProxmoxWebhook(
       payload: input.payload,
     },
   }).catch((err) => {
-    console.warn("Proxmox webhook audit log write failed:", err);
+    console.warn("Backup webhook audit log write failed:", err);
   });
 }
 
-function auditProcessedProxmoxWebhook(
-  webhookStorage: ProxmoxWebhookStorage,
+function auditProcessedBackupWebhook(
+  webhookStorage: BackupWebhookStorage,
   input: {
     source?: string | null;
     jobId?: string | null;
@@ -469,9 +499,9 @@ function auditProcessedProxmoxWebhook(
   void webhookStorage.createAuditLog({
     actor: "system",
     action: "process",
-    entityType: "proxmox-webhook",
+    entityType: "backup-webhook",
     entityId: String(input.eventId),
-    summary: `Processed Proxmox webhook: status=${input.eventStatus} job=#${input.matchedJobId} ${expectedRun}${runLinkReason} duplicate=${input.duplicate ? "yes" : "no"} (${identity})`,
+    summary: `Processed backup webhook: status=${input.eventStatus} job=#${input.matchedJobId} ${expectedRun}${runLinkReason} duplicate=${input.duplicate ? "yes" : "no"} (${identity})`,
     metadataJson: {
       source: input.source || null,
       jobId: input.jobId || null,
@@ -485,44 +515,51 @@ function auditProcessedProxmoxWebhook(
       payload: input.payload,
     },
   }).catch((err) => {
-    console.warn("Proxmox webhook audit log write failed:", err);
+    console.warn("Backup webhook audit log write failed:", err);
   });
 }
 
-export function createProxmoxWebhookHandler(webhookStorage: ProxmoxWebhookStorage = storage): RequestHandler {
+export function createBackupWebhookHandler(webhookStorage: BackupWebhookStorage = storage): RequestHandler {
   return async (req, res) => {
     const configuredSecret =
+      (await webhookStorage.getSettingValue(BACKUP_WEBHOOK_SECRET_SETTING)) ||
+      process.env.BACKUP_WEBHOOK_SECRET ||
       (await webhookStorage.getSettingValue(PROXMOX_WEBHOOK_SECRET_SETTING)) ||
       process.env.PROXMOX_WEBHOOK_SECRET;
 
-    const providedSecret = proxmoxWebhookSecretFromHeaders({
+    const providedSecret = backupWebhookSecretFromHeaders({
       authorization: req.get("authorization"),
       webhookSecret: req.get("x-secureshell-webhook-secret"),
       protectiveShellWebhookSecret: req.get("x-protectiveshell-webhook-secret"),
       genericWebhookSecret: req.get("x-webhook-secret"),
     });
-    if (!proxmoxWebhookSecretMatches(providedSecret, configuredSecret)) {
+    if (!backupWebhookSecretMatches(providedSecret, configuredSecret)) {
       return res.status(401).json({ message: "Invalid webhook secret" });
     }
 
-    const parsed = parseProxmoxWebhookPayload(req.body);
+    const parsed = parseBackupWebhookPayload(req.body);
     if (parsed.kind === "invalid") {
       return res.status(400).json({ message: parsed.message });
     }
     if (parsed.kind === "ignored") {
-      auditIgnoredProxmoxWebhook(webhookStorage, {
+      auditIgnoredBackupWebhook(webhookStorage, {
         reason: parsed.reason,
         source: webhookBodySource(req.body),
-        jobId: webhookBodyField(req.body, ["job-id", "job_id", "jobid"]),
+        jobId: webhookBodyField(req.body, ["jobId", "job-id", "job_id", "jobid", "task", "taskName"]),
         host: webhookBodyField(req.body, ["hostname", "host", "node", "node-name", "node_name"]),
         payload: req.body,
       });
       return res.status(202).json({ ok: true, ignored: true, reason: parsed.reason });
     }
 
-    const result = await webhookStorage.ingestProxmoxWebhookEvent(parsed.event);
+    const result = webhookStorage.ingestBackupWebhookEvent
+      ? await webhookStorage.ingestBackupWebhookEvent(parsed.event)
+      : await webhookStorage.ingestProxmoxWebhookEvent?.(parsed.event);
+    if (!result) {
+      throw new Error("Backup webhook ingestion is not configured");
+    }
     if (result.status === "ignored") {
-      auditIgnoredProxmoxWebhook(webhookStorage, {
+      auditIgnoredBackupWebhook(webhookStorage, {
         reason: result.reason,
         source: parsed.event.source,
         jobId: parsed.event.jobId,
@@ -532,7 +569,7 @@ export function createProxmoxWebhookHandler(webhookStorage: ProxmoxWebhookStorag
       return res.status(202).json({ ok: true, ignored: true, reason: result.reason });
     }
 
-    auditProcessedProxmoxWebhook(webhookStorage, {
+    auditProcessedBackupWebhook(webhookStorage, {
       source: parsed.event.source,
       jobId: parsed.event.jobId,
       host: parsed.event.host,
@@ -548,11 +585,14 @@ export function createProxmoxWebhookHandler(webhookStorage: ProxmoxWebhookStorag
   };
 }
 
+export const createProxmoxWebhookHandler = createBackupWebhookHandler;
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
-  app.post(PROXMOX_WEBHOOK_PATH, createProxmoxWebhookHandler());
+  app.post(BACKUP_WEBHOOK_PATH, createBackupWebhookHandler());
+  app.post(PROXMOX_WEBHOOK_PATH, createBackupWebhookHandler());
 
   // Dashboard
   app.get("/api/dashboard/stats", async (_req, res) => {

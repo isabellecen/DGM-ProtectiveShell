@@ -2,7 +2,7 @@ import type { Express, NextFunction, Request, Response } from "express";
 import { sql } from "drizzle-orm";
 import { db } from "./db";
 import { rateLimitHits } from "@shared/schema";
-import { PROXMOX_WEBHOOK_PATH } from "./proxmoxWebhook";
+import { BACKUP_WEBHOOK_PATH, PROXMOX_WEBHOOK_PATH } from "./backupWebhook";
 
 type RateLimitOptions = {
   windowMs: number;
@@ -75,8 +75,11 @@ function loginRateLimitMax(): number {
   return positiveIntegerFromValue(process.env.LOGIN_RATE_LIMIT_MAX, 8);
 }
 
-function proxmoxWebhookRateLimitMax(): number {
-  return positiveIntegerFromValue(process.env.PROXMOX_WEBHOOK_RATE_LIMIT_MAX, 300);
+function backupWebhookRateLimitMax(): number {
+  return positiveIntegerFromValue(
+    process.env.BACKUP_WEBHOOK_RATE_LIMIT_MAX || process.env.PROXMOX_WEBHOOK_RATE_LIMIT_MAX,
+    300,
+  );
 }
 
 export function enforceInsecureTargetPolicy() {
@@ -172,10 +175,18 @@ export function registerSecurity(app: Express) {
     }),
   );
   app.use(
+    BACKUP_WEBHOOK_PATH,
+    createRateLimit({
+      keyPrefix: "backup-webhook",
+      max: backupWebhookRateLimitMax(),
+      windowMs: 15 * 60 * 1000,
+    }),
+  );
+  app.use(
     PROXMOX_WEBHOOK_PATH,
     createRateLimit({
-      keyPrefix: "proxmox-webhook",
-      max: proxmoxWebhookRateLimitMax(),
+      keyPrefix: "backup-webhook",
+      max: backupWebhookRateLimitMax(),
       windowMs: 15 * 60 * 1000,
     }),
   );
@@ -185,5 +196,5 @@ export const securityInternals = {
   shouldSendHsts,
   productionContentSecurityPolicy,
   loginRateLimitMax,
-  proxmoxWebhookRateLimitMax,
+  backupWebhookRateLimitMax,
 };

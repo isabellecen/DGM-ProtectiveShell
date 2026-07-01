@@ -3,13 +3,13 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import test from "node:test";
 import express from "express";
-import { PROXMOX_WEBHOOK_PATH } from "./proxmoxWebhook";
+import { BACKUP_WEBHOOK_PATH, PROXMOX_WEBHOOK_PATH } from "./backupWebhook";
 
 process.env.DATABASE_URL ||= "postgres://user:password@localhost:5432/protectiveshell_test";
 
-const { createProxmoxWebhookHandler, routeInternals } = await import("./routes");
+const { createBackupWebhookHandler, routeInternals } = await import("./routes");
 
-type FakeWebhookStorage = NonNullable<Parameters<typeof createProxmoxWebhookHandler>[0]>;
+type FakeWebhookStorage = NonNullable<Parameters<typeof createBackupWebhookHandler>[0]>;
 
 function validWebhookBody() {
   return {
@@ -28,18 +28,33 @@ function validWebhookBody() {
 
 async function postWebhook(options: {
   configuredSecret?: string | null;
+  configuredBackupSecret?: string | null;
+  configuredProxmoxSecret?: string | null;
   headerSecret?: string | null;
   headerName?: "authorization" | "x-secureshell-webhook-secret" | "x-protectiveshell-webhook-secret" | "x-webhook-secret";
   body?: unknown;
-  ingestResult?: Awaited<ReturnType<FakeWebhookStorage["ingestProxmoxWebhookEvent"]>>;
+  ingestResult?: Awaited<ReturnType<NonNullable<FakeWebhookStorage["ingestBackupWebhookEvent"]>>>;
+  path?: string;
 } = {}) {
   const previousEnvSecret = process.env.PROXMOX_WEBHOOK_SECRET;
+  const previousBackupEnvSecret = process.env.BACKUP_WEBHOOK_SECRET;
   delete process.env.PROXMOX_WEBHOOK_SECRET;
+  delete process.env.BACKUP_WEBHOOK_SECRET;
 
   const ingestCalls: unknown[] = [];
   const fakeStorage: FakeWebhookStorage = {
-    getSettingValue: async () => options.configuredSecret === null ? undefined : options.configuredSecret ?? "secret",
-    ingestProxmoxWebhookEvent: async (event) => {
+    getSettingValue: async (key) => {
+      if (options.configuredSecret === null) return undefined;
+      if (key === "BACKUP_WEBHOOK_SECRET") {
+        if ("configuredBackupSecret" in options) return options.configuredBackupSecret ?? undefined;
+        return options.configuredSecret ?? "secret";
+      }
+      if (key === "PROXMOX_WEBHOOK_SECRET") {
+        if ("configuredProxmoxSecret" in options) return options.configuredProxmoxSecret ?? undefined;
+      }
+      return undefined;
+    },
+    ingestBackupWebhookEvent: async (event) => {
       ingestCalls.push(event);
       return options.ingestResult ?? {
         status: "processed",
@@ -54,7 +69,9 @@ async function postWebhook(options: {
 
   const app = express();
   app.use(express.json());
-  app.post(PROXMOX_WEBHOOK_PATH, createProxmoxWebhookHandler(fakeStorage));
+  app.use(express.urlencoded({ extended: false }));
+  app.post(BACKUP_WEBHOOK_PATH, createBackupWebhookHandler(fakeStorage));
+  app.post(PROXMOX_WEBHOOK_PATH, createBackupWebhookHandler(fakeStorage));
   const server = createServer(app);
 
   await new Promise<void>((resolve) => server.listen(0, resolve));
@@ -67,7 +84,7 @@ async function postWebhook(options: {
       headers[headerName] = headerName === "authorization" ? `Bearer ${headerSecret}` : headerSecret;
     }
 
-    const response = await fetch(`http://127.0.0.1:${port}${PROXMOX_WEBHOOK_PATH}`, {
+    const response = await fetch(`http://127.0.0.1:${port}${options.path ?? BACKUP_WEBHOOK_PATH}`, {
       method: "POST",
       headers,
       body: JSON.stringify(options.body ?? validWebhookBody()),
@@ -85,6 +102,11 @@ async function postWebhook(options: {
       delete process.env.PROXMOX_WEBHOOK_SECRET;
     } else {
       process.env.PROXMOX_WEBHOOK_SECRET = previousEnvSecret;
+    }
+    if (previousBackupEnvSecret === undefined) {
+      delete process.env.BACKUP_WEBHOOK_SECRET;
+    } else {
+      process.env.BACKUP_WEBHOOK_SECRET = previousBackupEnvSecret;
     }
   }
 }
@@ -113,6 +135,7 @@ test("setting validation accepts supported blank and formatted values", () => {
   assert.equal(routeInternals.settingSchema.safeParse({ key: "APP_TIMEZONE", value: "America/Phoenix" }).success, true);
   assert.equal(routeInternals.settingSchema.safeParse({ key: "DAILY_REPORT_TIME", value: "08:30" }).success, true);
   assert.equal(routeInternals.settingSchema.safeParse({ key: "SMTP_FROM", value: "ops@example.com" }).success, true);
+  assert.equal(routeInternals.settingSchema.safeParse({ key: "BACKUP_WEBHOOK_SECRET", value: "secret" }).success, true);
   assert.equal(routeInternals.settingSchema.safeParse({ key: "PROXMOX_WEBHOOK_SECRET", value: "secret" }).success, true);
 });
 
@@ -171,6 +194,10 @@ test("job webhook mapping validation requires a job id when source is set", () =
   assert.doesNotThrow(() => routeInternals.assertJobWebhookMappingValid({}, {
     webhookSource: "PVE",
     webhookJobId: "backup-123",
+  }));
+  assert.doesNotThrow(() => routeInternals.assertJobWebhookMappingValid({}, {
+    webhookSource: "DSM",
+    webhookJobId: "CloudStation Backup",
   }));
 });
 
@@ -246,7 +273,7 @@ test("pagination query validation applies defaults and bounds", () => {
   assert.equal(routeInternals.paginationQuerySchema.safeParse({ offset: "-1" }).success, false);
 });
 
-test("Proxmox webhook route rejects missing and wrong secrets", async () => {
+test("backup webhook route rejects missing and wrong secrets", async () => {
   assert.deepEqual(
     await postWebhook({ configuredSecret: null }),
     {
@@ -275,7 +302,7 @@ test("Proxmox webhook route rejects missing and wrong secrets", async () => {
   );
 });
 
-test("Proxmox webhook route accepts custom secret headers", async () => {
+test("backup webhook route accepts custom secret headers", async () => {
   assert.equal(
     (await postWebhook({ headerName: "x-secureshell-webhook-secret" })).status,
     200,
@@ -290,7 +317,18 @@ test("Proxmox webhook route accepts custom secret headers", async () => {
   );
 });
 
-test("Proxmox webhook route validates and ignores payloads", async () => {
+test("backup webhook route falls back to legacy Proxmox secret setting", async () => {
+  const result = await postWebhook({
+    configuredBackupSecret: null,
+    configuredProxmoxSecret: "legacy-secret",
+    headerSecret: "legacy-secret",
+  });
+
+  assert.equal(result.status, 200);
+  assert.equal(result.ingestCalls.length, 1);
+});
+
+test("backup webhook route validates and ignores payloads", async () => {
   const malformed = await postWebhook({ body: { source: "PVE" } });
   assert.equal(malformed.status, 400);
   assert.equal(malformed.ingestCalls.length, 0);
@@ -310,7 +348,7 @@ test("Proxmox webhook route validates and ignores payloads", async () => {
   assert.equal(unsupported.ingestCalls.length, 0);
 });
 
-test("Proxmox webhook route returns ignored, processed, and duplicate ingest responses", async () => {
+test("backup webhook route returns ignored, processed, and duplicate ingest responses", async () => {
   const unmatched = await postWebhook({
     ingestResult: { status: "ignored", reason: "no matching backup job webhook mapping" },
   });
@@ -355,4 +393,11 @@ test("Proxmox webhook route returns ignored, processed, and duplicate ingest res
   });
   assert.equal(duplicate.status, 200);
   assert.equal(duplicate.ingestCalls.length, 1);
+});
+
+test("legacy Proxmox webhook route uses the backup webhook handler", async () => {
+  const result = await postWebhook({ path: PROXMOX_WEBHOOK_PATH });
+
+  assert.equal(result.status, 200);
+  assert.equal(result.ingestCalls.length, 1);
 });

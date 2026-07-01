@@ -110,6 +110,36 @@ test("job workflow normalizes schedule and customer fields", () => {
       webhookHost: "pve1",
     },
   );
+
+  assert.deepEqual(
+    buildJobPayload({
+      name: "DSM Backup",
+      systemType: "SYNOLOGY",
+      customerId: null,
+      scheduleType: "daily",
+      scheduleTime: "02:00",
+      windowHours: "6",
+      enabled: true,
+      webhookSource: "DSM",
+      webhookJobId: " CloudStation Backup ",
+      webhookHost: " nas1 ",
+    }),
+    {
+      name: "DSM Backup",
+      systemType: "SYNOLOGY",
+      customerId: null,
+      scheduleType: "daily",
+      scheduleTime: "02:00",
+      windowHours: 6,
+      enabled: true,
+      longRunning: false,
+      longWindowHours: undefined,
+      daysOfWeek: [],
+      webhookSource: "DSM",
+      webhookJobId: "CloudStation Backup",
+      webhookHost: "nas1",
+    },
+  );
 });
 
 test("target and host edit workflows preserve existing secrets when blank", () => {
@@ -191,6 +221,10 @@ test("email and settings workflows build normalized API payloads", () => {
   });
   assert.deepEqual(buildSettingPayload("PROXMOX_WEBHOOK_SECRET", "secret"), {
     key: "PROXMOX_WEBHOOK_SECRET",
+    value: "secret",
+  });
+  assert.deepEqual(buildSettingPayload("BACKUP_WEBHOOK_SECRET", "secret"), {
+    key: "BACKUP_WEBHOOK_SECRET",
     value: "secret",
   });
 });

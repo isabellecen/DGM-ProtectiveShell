@@ -263,7 +263,7 @@ When the scheduler is enabled:
 - Expected backup runs are produced every 15 minutes.
 - Pending expected runs are checked every minute. Missed deadlines become `MISSING` and create open critical backup incidents.
 - Matched backup emails with `FAIL` or `WARN` status open or update backup incidents. Matched `OK` emails resolve the matching backup-status incident.
-- PVE/PBS notification webhooks can update mapped backup jobs directly through `/api/integrations/proxmox/notifications` when `PROXMOX_WEBHOOK_SECRET` is configured.
+- PVE/PBS and Synology DSM notification webhooks can update mapped backup jobs directly through `/api/integrations/backup/notifications` when `BACKUP_WEBHOOK_SECRET` is configured. The legacy Proxmox endpoint and `PROXMOX_WEBHOOK_SECRET` remain supported.
 - Open incidents with unsent notifications are delivered through SMTP every 5 minutes when SMTP settings and recipients are configured.
 
 Manual "run check" and "poll now" actions are available in the UI for Proxmox hosts and backup targets.

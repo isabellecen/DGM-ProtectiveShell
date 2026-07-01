@@ -23,7 +23,7 @@ import { CLEAR_SECRET_SETTING_VALUE } from "@shared/settings";
 import { decryptSecret, encryptSecret, isSecretSettingKey } from "./crypto";
 import { detectEventStatus, type EmailEventStatus } from "./emailStatus";
 import { backupEmailIncidentFingerprint, syncBackupEmailIncident, syncBackupWebhookIncident } from "./backupIncidents";
-import type { NormalizedProxmoxWebhookEvent } from "./proxmoxWebhook";
+import type { NormalizedBackupWebhookEvent } from "./backupWebhook";
 
 type WithCustomerName = { customerName?: string | null };
 type WithJobName = { jobName?: string | null };
@@ -38,7 +38,7 @@ export type PaginatedResult<T> = {
   offset: number;
 };
 
-export type ProxmoxWebhookIngestResult =
+export type BackupWebhookIngestResult =
   | {
       status: "processed";
       jobId: number;
@@ -49,6 +49,8 @@ export type ProxmoxWebhookIngestResult =
       duplicate: boolean;
     }
   | { status: "ignored"; reason: string };
+
+export type ProxmoxWebhookIngestResult = BackupWebhookIngestResult;
 
 export interface IStorage {
   getCustomers(): Promise<Customer[]>;
@@ -104,7 +106,8 @@ export interface IStorage {
   getUnmatchedEmailCount(): Promise<number>;
   getEmailIngestionFailures(limit?: number, offset?: number): Promise<PaginatedResult<EmailIngestionFailure>>;
   getEvents(limit?: number): Promise<(Event & WithJobName)[]>;
-  ingestProxmoxWebhookEvent(event: NormalizedProxmoxWebhookEvent): Promise<ProxmoxWebhookIngestResult>;
+  ingestBackupWebhookEvent(event: NormalizedBackupWebhookEvent): Promise<BackupWebhookIngestResult>;
+  ingestProxmoxWebhookEvent(event: NormalizedBackupWebhookEvent): Promise<BackupWebhookIngestResult>;
 
   getProxmoxChecks(hostId: number, limit?: number): Promise<ProxmoxCheck[]>;
   createProxmoxCheck(data: InsertProxmoxCheck): Promise<ProxmoxCheck>;
@@ -1034,7 +1037,7 @@ export class DatabaseStorage implements IStorage {
     return result;
   }
 
-  async ingestProxmoxWebhookEvent(input: NormalizedProxmoxWebhookEvent): Promise<ProxmoxWebhookIngestResult> {
+  async ingestBackupWebhookEvent(input: NormalizedBackupWebhookEvent): Promise<BackupWebhookIngestResult> {
     const timezone = normalizeTimezoneValue(
       (await this.getSettingValue("APP_TIMEZONE")) || process.env.APP_TIMEZONE,
     );
@@ -1168,7 +1171,7 @@ export class DatabaseStorage implements IStorage {
           status: input.status,
           receivedAt: input.receivedAt,
           emailId: null,
-          sourceType: "PROXMOX_WEBHOOK",
+          sourceType: "BACKUP_WEBHOOK",
           sourceFingerprint: input.fingerprint,
           payloadJson: input.payload,
         })
@@ -1233,6 +1236,10 @@ export class DatabaseStorage implements IStorage {
         duplicate: false,
       };
     });
+  }
+
+  async ingestProxmoxWebhookEvent(input: NormalizedBackupWebhookEvent): Promise<BackupWebhookIngestResult> {
+    return this.ingestBackupWebhookEvent(input);
   }
 
   async getProxmoxChecks(hostId: number, limit = 20): Promise<ProxmoxCheck[]> {

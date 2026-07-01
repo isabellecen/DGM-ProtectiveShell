@@ -332,7 +332,7 @@ if (!runIntegrationTests) {
       assert.equal(runAfter.status, "FAIL");
 
       const [eventAfter] = await db.select().from(events).where(eq(events.sourceFingerprint, sourceFingerprint));
-      assert.equal(eventAfter.sourceType, "PROXMOX_WEBHOOK");
+      assert.equal(eventAfter.sourceType, "BACKUP_WEBHOOK");
       assert.equal(eventAfter.expectedRunId, run.id);
 
       const [incidentAfter] = await db
@@ -448,6 +448,178 @@ if (!runIntegrationTests) {
         .from(incidents)
         .where(eq(incidents.sourceFingerprint, oldRunIncidentFingerprint));
       assert.equal(oldRunIncidentAfterOk.state, "OPEN");
+    } finally {
+      if (createdIncidentFingerprints.length) {
+        await db.delete(incidents).where(inArray(incidents.sourceFingerprint, createdIncidentFingerprints));
+      }
+      if (createdEventIds.length) {
+        await db.delete(events).where(inArray(events.id, createdEventIds));
+      }
+      if (createdRunIds.length) {
+        await db.delete(expectedRuns).where(inArray(expectedRuns.id, createdRunIds));
+      }
+      if (createdJobIds.length) {
+        await db.delete(jobs).where(inArray(jobs.id, createdJobIds));
+      }
+      if (createdCustomerId) {
+        await db.delete(customers).where(eq(customers.id, createdCustomerId));
+      }
+    }
+  });
+
+  test("DSM webhook ingestion links runs and syncs backup incidents", async () => {
+    const { db } = await import("./db");
+    const { storage } = await import("./storage");
+    const { backupWebhookIncidentFingerprint } = await import("./backupIncidents");
+    const { backupWebhookFingerprint } = await import("./backupWebhook");
+
+    const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const taskName = `CloudStation Backup ${suffix}`;
+    const receivedAt = new Date("2026-06-30T10:30:00.000Z");
+    const okReceivedAt = new Date("2026-06-30T11:00:00.000Z");
+    const scheduledFor = new Date("2026-06-30T10:00:00.000Z");
+    const deadlineAt = new Date("2026-06-30T14:00:00.000Z");
+
+    const createdJobIds: number[] = [];
+    const createdRunIds: number[] = [];
+    const createdEventIds: number[] = [];
+    const createdIncidentFingerprints: string[] = [];
+    let createdCustomerId: number | undefined;
+
+    try {
+      const [customer] = await db.insert(customers).values({ name: `dsm-webhook-test-${suffix}` }).returning();
+      createdCustomerId = customer.id;
+
+      const [job] = await db
+        .insert(jobs)
+        .values({
+          customerId: customer.id,
+          name: `dsm-webhook-job-${suffix}`,
+          systemType: "SYNOLOGY",
+          scheduleType: "daily",
+          scheduleTime: "10:00",
+          windowHours: 4,
+          webhookSource: "DSM",
+          webhookJobId: taskName,
+          webhookHost: "nas1",
+        })
+        .returning();
+      createdJobIds.push(job.id);
+
+      const [run] = await db
+        .insert(expectedRuns)
+        .values({
+          jobId: job.id,
+          scheduledFor,
+          deadlineAt,
+          status: "PENDING",
+        })
+        .returning();
+      createdRunIds.push(run.id);
+
+      const incidentFingerprint = backupWebhookIncidentFingerprint({
+        source: "DSM",
+        eventType: "hyper-backup",
+        webhookJobId: taskName,
+        host: "nas1",
+        expectedRunId: run.id,
+      });
+      createdIncidentFingerprints.push(incidentFingerprint);
+
+      const failFingerprint = backupWebhookFingerprint({
+        source: "DSM",
+        eventType: "hyper-backup",
+        jobId: taskName,
+        host: "nas1",
+        timestamp: receivedAt,
+        severity: "FAIL",
+      });
+      const failed = await storage.ingestBackupWebhookEvent({
+        source: "DSM",
+        eventType: "hyper-backup",
+        jobId: taskName,
+        host: "nas1",
+        severity: "error",
+        status: "FAIL",
+        receivedAt,
+        title: "Hyper Backup task failed",
+        message: "Task failed",
+        fingerprint: failFingerprint,
+        payload: { test: true },
+      });
+
+      assert.equal(failed.status, "processed");
+      if (failed.status === "processed") {
+        createdEventIds.push(failed.eventId);
+        assert.equal(failed.jobId, job.id);
+        assert.equal(failed.expectedRunId, run.id);
+      }
+
+      const [eventAfterFail] = await db.select().from(events).where(eq(events.sourceFingerprint, failFingerprint));
+      assert.equal(eventAfterFail.sourceType, "BACKUP_WEBHOOK");
+      assert.equal(eventAfterFail.status, "FAIL");
+
+      const [incidentAfterFail] = await db
+        .select()
+        .from(incidents)
+        .where(eq(incidents.sourceFingerprint, incidentFingerprint));
+      assert.equal(incidentAfterFail.state, "OPEN");
+
+      const duplicateFail = await storage.ingestBackupWebhookEvent({
+        source: "DSM",
+        eventType: "hyper-backup",
+        jobId: taskName,
+        host: "nas1",
+        severity: "error",
+        status: "FAIL",
+        receivedAt,
+        title: "Hyper Backup task failed",
+        message: "Task failed",
+        fingerprint: failFingerprint,
+        payload: { test: true, duplicate: true },
+      });
+      assert.equal(duplicateFail.status, "processed");
+      if (duplicateFail.status === "processed") {
+        assert.equal(duplicateFail.duplicate, true);
+        assert.equal(duplicateFail.eventId, failed.status === "processed" ? failed.eventId : 0);
+      }
+
+      const okFingerprint = backupWebhookFingerprint({
+        source: "DSM",
+        eventType: "hyper-backup",
+        jobId: taskName,
+        host: "nas1",
+        timestamp: okReceivedAt,
+        severity: "OK",
+      });
+      const ok = await storage.ingestBackupWebhookEvent({
+        source: "DSM",
+        eventType: "hyper-backup",
+        jobId: taskName,
+        host: "nas1",
+        severity: "info",
+        status: "OK",
+        receivedAt: okReceivedAt,
+        title: "Hyper Backup task completed",
+        message: "Task completed successfully",
+        fingerprint: okFingerprint,
+        payload: { test: true },
+      });
+
+      assert.equal(ok.status, "processed");
+      if (ok.status === "processed") {
+        createdEventIds.push(ok.eventId);
+        assert.equal(ok.expectedRunId, run.id);
+      }
+
+      const [runAfterOk] = await db.select().from(expectedRuns).where(eq(expectedRuns.id, run.id));
+      assert.equal(runAfterOk.status, "OK");
+
+      const [incidentAfterOk] = await db
+        .select()
+        .from(incidents)
+        .where(eq(incidents.sourceFingerprint, incidentFingerprint));
+      assert.equal(incidentAfterOk.state, "RESOLVED");
     } finally {
       if (createdIncidentFingerprints.length) {
         await db.delete(incidents).where(inArray(incidents.sourceFingerprint, createdIncidentFingerprints));
